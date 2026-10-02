@@ -53,7 +53,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-private const val WS_URL = "ws://192.168.50.107:8000/ws"
+// --- UPDATED FOR ANDROID STUDIO EMULATOR ---
+private const val WS_URL = "ws://10.0.2.2:8000/ws"
 
 // --- SLEEK DARK STREAMING COLORS ---
 val GlassCard = Color(0xAA0D0D12)
@@ -370,7 +371,7 @@ fun ArgusScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("A.R.G.U.S.", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+                Text("A.R.G.U.S.", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Default)
 
                 MetricsRow(MainActivity.systemMetrics.value)
 
@@ -406,7 +407,7 @@ fun ArgusScreen(
                                 .background(GlassCard)
                                 .padding(8.dp)
                         ) {
-                            Text(msg.sender.uppercase(), color = if (isAI) ArgusTeal else Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Text(msg.sender.uppercase(), color = if (isAI) ArgusTeal else Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Default)
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(msg.text, color = Color.White, fontSize = 12.sp)
                         }
@@ -461,15 +462,15 @@ fun ArgusScreen(
 fun MetricsRow(metrics: SystemMetrics) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = "VRAM", color = ArgusSubtext, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+            Text(text = "VRAM", color = ArgusSubtext, fontSize = 8.sp, fontFamily = FontFamily.Default)
             Text(text = "${metrics.vramUsed}G", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = "TEMP", color = ArgusSubtext, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+            Text(text = "TEMP", color = ArgusSubtext, fontSize = 8.sp, fontFamily = FontFamily.Default)
             Text(text = "${metrics.temperature}°", color = ArgusTeal, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = "LAT", color = ArgusSubtext, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+            Text(text = "LAT", color = ArgusSubtext, fontSize = 8.sp, fontFamily = FontFamily.Default)
             Text(text = "${metrics.latency}ms", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         }
     }
