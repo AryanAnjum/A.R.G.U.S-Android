@@ -59,7 +59,7 @@ import java.util.concurrent.atomic.AtomicLong
 // PHYSICAL PHONE -> PC
 // ============================================================
 
-private const val WS_URL = "ws://192.168.50.107:8000/ws"
+private const val WS_URL = "ws://172.20.10.3:8000/ws"
 
 
 // ============================================================
