@@ -1,9 +1,11 @@
 package com.argus.assistant
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
@@ -12,13 +14,18 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Base64
+import android.util.Size
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
@@ -59,7 +66,25 @@ import java.util.concurrent.atomic.AtomicLong
 // PHYSICAL PHONE -> PC
 // ============================================================
 
-private const val WS_URL = "ws://172.20.10.3:8000/ws"
+// Default server address. It can be changed in the app (tap the address under the
+// controls while disconnected) and is remembered between launches.
+private const val DEFAULT_WS_URL = "ws://172.20.10.3:8000/ws"
+private const val PREFS = "argus"
+private const val PREF_WS_URL = "ws_url"
+
+// Camera frames sent to the PC.
+private const val LIVE_FRAME_MS = 800L      // background frame for normal questions
+private const val LIVE_FRAME_PX = 1024      // long side of normal frames
+private const val SIGN_FRAME_MS = 70L       // ~14 fps for sign language translation
+private const val SIGN_FRAME_PX = 640
+private const val OCR_PHOTO_PX = 1920       // OCR photo: full detail for small text
+
+// Questions that need text read: answered from a sharp full-resolution photo.
+private val OCR_INTENT = Regex(
+    "\\b(read|reading|what does (it|this|that) say|what is written|whats written|written|text|label|" +
+        "how much (money|is this)|money|cash|taka|banknote|note is this|bill|price|medicine|expiry|" +
+        "dose|dosage|ingredients|equation|formula|number)\\b"
+)
 
 
 // ============================================================
@@ -137,6 +162,20 @@ class MainActivity : ComponentActivity() {
     private val lastCameraFrameMs =
         AtomicLong(0L)
 
+    private var imageCapture: ImageCapture? = null
+
+    // Mode this phone is in: screen | live | assistive | slt
+    private var currentMode by mutableStateOf("live")
+
+    // OCR button: next question is answered from a sharp 1920 px photo.
+    private var ocrMode by mutableStateOf(false)
+
+    private var serverUrl by mutableStateOf(DEFAULT_WS_URL)
+
+    // Reply audio arrives one sentence at a time; play the clips in order.
+    private val audioQueue = ArrayDeque<File>()
+    private var audioRequestId: String? = null
+
     // Phone-local wake/sleep state.
     private var phoneAwake = false
 
@@ -148,6 +187,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
 
         super.onCreate(savedInstanceState)
+
+        serverUrl =
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(PREF_WS_URL, DEFAULT_WS_URL)
+                ?: DEFAULT_WS_URL
 
         setContent {
 
@@ -168,12 +212,40 @@ class MainActivity : ComponentActivity() {
                     },
 
                     onMode = { mode ->
+                        setPhoneMode(mode)
+                    },
 
+                    currentMode = currentMode,
+
+                    ocrMode = ocrMode,
+
+                    onOcrToggle = {
+                        ocrMode = !ocrMode
+                        addTransientMessage(
+                            "System",
+                            if (ocrMode) "OCR on: questions use a sharp full-resolution photo."
+                            else "OCR off.",
+                            isSystem = true
+                        )
+                    },
+
+                    onSignAction = { action ->
                         sendEvent(
                             JSONObject()
-                                .put("event", "set_mode")
-                                .put("mode", mode)
+                                .put("event", "slt_control")
+                                .put("action", action)
+                                .put("origin", "phone")
                         )
+                    },
+
+                    serverUrl = serverUrl,
+
+                    onServerUrlChange = { url ->
+                        serverUrl = url.trim()
+                        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString(PREF_WS_URL, serverUrl)
+                            .apply()
                     },
 
                     onVoiceToggle = {
@@ -221,7 +293,7 @@ class MainActivity : ComponentActivity() {
 
         val request =
             Request.Builder()
-                .url(WS_URL)
+                .url(serverUrl)
                 .build()
 
         socket =
@@ -233,6 +305,18 @@ class MainActivity : ComponentActivity() {
                         webSocket: WebSocket,
                         response: Response
                     ) {
+
+                        // Tell the server this is the phone, which mode it is in, and that it
+                        // can play a reply as several clips (one per sentence).
+                        webSocket.send(
+                            JSONObject()
+                                .put("event", "hello")
+                                .put("client", "phone")
+                                .put("origin", "phone")
+                                .put("mode", currentMode)
+                                .put("features", org.json.JSONArray().put("audio_queue"))
+                                .toString()
+                        )
 
                         mainHandler.post {
 
@@ -322,10 +406,48 @@ class MainActivity : ComponentActivity() {
                                 "tts_audio" -> {
 
                                     playPhoneAudio(
-                                        data.optString(
-                                            "audio_base64",
-                                            ""
-                                        )
+                                        data.optString("audio_base64", ""),
+                                        data.optString("mime_type", "audio/mpeg"),
+                                        data.optString("request_id", "")
+                                    )
+                                }
+
+
+                                // ------------------------
+                                // SIGN LANGUAGE
+                                // ------------------------
+
+                                "slt_caption" -> {
+                                    val caption = data.optString("text")
+                                    mainHandler.post {
+                                        signCaption.value = caption
+                                        signCaptionEnglish.value = ""
+                                    }
+                                }
+
+                                "slt_caption_english" -> {
+                                    val english = data.optString("text")
+                                    mainHandler.post {
+                                        signCaptionEnglish.value = english
+                                    }
+                                }
+
+                                "slt_status" -> {
+                                    val status = when (data.optString("state")) {
+                                        "signing" -> "Signing... ${data.optString("seconds")}s"
+                                        "translating" -> "Translating..."
+                                        else -> data.optString("note").ifBlank { "Show your hands to sign" }
+                                    }
+                                    mainHandler.post {
+                                        signStatus.value = status
+                                    }
+                                }
+
+                                "slt_error" -> {
+                                    addTransientMessage(
+                                        "System",
+                                        data.optString("text"),
+                                        isSystem = true
                                     )
                                 }
 
@@ -337,6 +459,8 @@ class MainActivity : ComponentActivity() {
                                 "mode_changed" -> {
 
                                     mainHandler.post {
+
+                                        currentMode = data.optString("mode", currentMode)
 
                                         connectionStatus.value =
                                             "Connected • Mode: ${
@@ -706,18 +830,10 @@ class MainActivity : ComponentActivity() {
 
     private fun stopPhoneAudio() {
         mainHandler.post {
-            mediaPlayer?.let {
-                try {
-                    if (it.isPlaying) it.stop()
-                } catch (_: Exception) {
-                }
-                try {
-                    it.release()
-                } catch (_: Exception) {
-                }
-            }
-            mediaPlayer = null
+            clearAudioQueue()
+            stopCurrentPlayer()
         }
+        sendEvent(JSONObject().put("event", "stop").put("origin", "phone"))
     }
 
     private fun handlePhoneSpeech(phrase: String) {
@@ -775,19 +891,87 @@ class MainActivity : ComponentActivity() {
                 return
             }
 
-            sendEvent(
-                JSONObject()
-                    .put("event", "user_prompt")
-                    .put("text", wakeRemainder)
-                    .put("origin", "phone")
-            )
+            sendPrompt(wakeRemainder)
             return
+        }
+
+        sendPrompt(cleanedPhrase)
+    }
+
+
+    // ========================================================
+    // PROMPTS (WITH OCR PHOTO)
+    // ========================================================
+
+    private fun sendPrompt(text: String) {
+
+        val wantsOcr =
+            ocrMode || OCR_INTENT.containsMatchIn(normalizePhoneCommand(text))
+
+        val prompt =
+            JSONObject()
+                .put("event", "user_prompt")
+                .put("text", text)
+                .put("origin", "phone")
+                .put("mode", currentMode)
+                .put("ocr", wantsOcr)
+
+        val capture = imageCapture
+
+        if (!wantsOcr || !isCameraRunning || capture == null || currentMode == "screen") {
+            sendEvent(prompt)
+            return
+        }
+
+        addTransientMessage("System", "Taking a sharp photo to read...", isSystem = true)
+
+        capture.takePicture(
+            cameraExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    try {
+                        val jpeg = encodeFrame(image, OCR_PHOTO_PX, 90)
+                        prompt.put("image_data", jpeg)
+                    } catch (_: Exception) {
+                        // fall back to the server's latest frame
+                    } finally {
+                        image.close()
+                    }
+                    sendEvent(prompt)
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    sendEvent(prompt)
+                }
+            }
+        )
+    }
+
+
+    private fun setPhoneMode(mode: String) {
+
+        currentMode = mode
+
+        lastCameraFrameMs.set(0L)
+
+        if (mode != "slt") {
+            mainHandler.post {
+                signCaption.value = ""
+                signCaptionEnglish.value = ""
+            }
+        } else if (!isCameraRunning) {
+            addTransientMessage(
+                "System",
+                "Turn the camera on and sign in front of it.",
+                isSystem = true
+            )
         }
 
         sendEvent(
             JSONObject()
-                .put("event", "user_prompt")
-                .put("text", cleanedPhrase)
+                .put("event", "set_mode")
+                .put("mode", mode)
                 .put("origin", "phone")
         )
     }
@@ -1087,8 +1271,37 @@ class MainActivity : ComponentActivity() {
                         }
 
 
+                // 1280x720 frames for streaming (scaled down again before sending);
+                // the default would be 640x480, too small to read text.
+                val analysisResolution =
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                Size(1280, 720),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                            )
+                        )
+                        .build()
+
+                // OCR photos: the sharpest still the camera can take near 1920x1080.
+                val capture =
+                    ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .setResolutionSelector(
+                            ResolutionSelector.Builder()
+                                .setResolutionStrategy(
+                                    ResolutionStrategy(
+                                        Size(1920, 1080),
+                                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                                    )
+                                )
+                                .build()
+                        )
+                        .build()
+
                 val analysis =
                     ImageAnalysis.Builder()
+                        .setResolutionSelector(analysisResolution)
                         .setBackpressureStrategy(
                             ImageAnalysis
                                 .STRATEGY_KEEP_ONLY_LATEST
@@ -1120,12 +1333,15 @@ class MainActivity : ComponentActivity() {
                             )
                             .build()
 
-                    provider.bindToLifecycle(
-                        this,
-                        selector,
-                        preview,
-                        analysis
-                    )
+                    try {
+                        provider.bindToLifecycle(this, selector, preview, analysis, capture)
+                        imageCapture = capture
+                    } catch (_: Exception) {
+                        // Some phones can't run three use cases at once: OCR then uses stream frames.
+                        provider.unbindAll()
+                        provider.bindToLifecycle(this, selector, preview, analysis)
+                        imageCapture = null
+                    }
 
                     cameraProvider =
                         provider
@@ -1150,110 +1366,38 @@ class MainActivity : ComponentActivity() {
 
         try {
 
-            val now =
-                System.currentTimeMillis()
+            val mode = currentMode
 
-            // Send at most one frame every 600ms
-            if (
-                now -
-                lastCameraFrameMs.get()
-                < 600L
-            ) {
+            // Screen mode looks at the PC screen, so the phone camera isn't needed.
+            if (mode == "screen" || socket == null) {
+                return
+            }
 
+            val sign = mode == "slt"
+            val interval = if (sign) SIGN_FRAME_MS else LIVE_FRAME_MS
+            val now = System.currentTimeMillis()
+
+            if (now - lastCameraFrameMs.get() < interval) {
                 return
             }
 
             lastCameraFrameMs.set(now)
 
-
-            val plane =
-                image.planes.firstOrNull()
-                    ?: return
-
-            val buffer =
-                plane.buffer
-
-            val pixelStride =
-                plane.pixelStride
-
-            val rowStride =
-                plane.rowStride
-
-            val width =
-                image.width
-
-            val height =
-                image.height
-
-            val rowPadding =
-                rowStride -
-                        pixelStride * width
-
-            val paddedWidth =
-                width +
-                        rowPadding / pixelStride
-
-
-            val bitmap =
-                Bitmap.createBitmap(
-                    paddedWidth,
-                    height,
-                    Bitmap.Config.ARGB_8888
-                )
-
-
-            bitmap.copyPixelsFromBuffer(
-                buffer
-            )
-
-
-            val cropped =
-                Bitmap.createBitmap(
-                    bitmap,
-                    0,
-                    0,
-                    width,
-                    height
-                )
-
-
-            val output =
-                ByteArrayOutputStream()
-
-
-            cropped.compress(
-                Bitmap.CompressFormat.JPEG,
-                30,
-                output
-            )
-
-
             val encoded =
-                Base64.encodeToString(
-                    output.toByteArray(),
-                    Base64.NO_WRAP
-                )
+                if (sign) encodeFrame(image, SIGN_FRAME_PX, 70)
+                else encodeFrame(image, LIVE_FRAME_PX, 80)
 
-
-            sendEvent(
-
+            val event =
                 JSONObject()
-                    .put(
-                        "event",
-                        "video_frame"
-                    )
-                    .put(
-                        "image_data",
-                        encoded
-                    )
-            )
+                    .put("event", if (sign) "slt_frame" else "video_frame")
+                    .put("origin", "phone")
+                    .put("image_data", encoded)
 
-
-            bitmap.recycle()
-
-            if (cropped !== bitmap) {
-                cropped.recycle()
+            if (sign) {
+                event.put("ts", now)
             }
+
+            sendEvent(event)
 
         } catch (_: Exception) {
 
@@ -1261,6 +1405,40 @@ class MainActivity : ComponentActivity() {
 
             image.close()
         }
+    }
+
+
+    /**
+     * Camera image -> upright JPEG (base64) with its long side at most maxPx.
+     * Rotation is applied here, so the model never sees sideways text.
+     */
+    private fun encodeFrame(
+        image: ImageProxy,
+        maxPx: Int,
+        quality: Int
+    ): String {
+
+        val source = image.toBitmap()
+        val rotation = image.imageInfo.rotationDegrees
+        val scale = minOf(1f, maxPx.toFloat() / maxOf(source.width, source.height))
+
+        val matrix = Matrix().apply {
+            postScale(scale, scale)
+            postRotate(rotation.toFloat())
+        }
+
+        val upright =
+            Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+
+        val output = ByteArrayOutputStream()
+        upright.compress(Bitmap.CompressFormat.JPEG, quality, output)
+
+        if (upright !== source) {
+            upright.recycle()
+        }
+        source.recycle()
+
+        return Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
     }
 
 
@@ -1301,7 +1479,9 @@ class MainActivity : ComponentActivity() {
     // ========================================================
 
     private fun playPhoneAudio(
-        encoded: String
+        encoded: String,
+        mimeType: String,
+        requestId: String
     ) {
 
         if (encoded.isBlank()) {
@@ -1310,62 +1490,88 @@ class MainActivity : ComponentActivity() {
 
         try {
 
+            val extension = if (mimeType == "audio/wav") "wav" else "mp3"
+
             val file =
-                File(
-                    cacheDir,
-                    "argus_reply.mp3"
-                ).apply {
-
-                    writeBytes(
-                        Base64.decode(
-                            encoded,
-                            Base64.DEFAULT
-                        )
-                    )
+                File(cacheDir, "argus_${System.nanoTime()}.$extension").apply {
+                    writeBytes(Base64.decode(encoded, Base64.DEFAULT))
                 }
-
 
             mainHandler.post {
 
-                mediaPlayer?.let {
-
-                    if (it.isPlaying) {
-                        it.stop()
-                    }
-
-                    it.release()
+                // A new reply replaces whatever was still playing from the previous one.
+                if (requestId.isEmpty() || requestId != audioRequestId) {
+                    audioRequestId = requestId
+                    clearAudioQueue()
+                    stopCurrentPlayer()
                 }
 
+                audioQueue.addLast(file)
 
-                mediaPlayer =
-                    MediaPlayer().apply {
-
-                        setDataSource(
-                            file.absolutePath
-                        )
-
-                        setOnCompletionListener {
-
-                            it.release()
-
-                            file.delete()
-
-                            if (
-                                mediaPlayer ==
-                                this
-                            ) {
-
-                                mediaPlayer = null
-                            }
-                        }
-
-                        prepare()
-
-                        start()
-                    }
+                if (mediaPlayer == null) {
+                    playNextClip()
+                }
             }
 
         } catch (_: Exception) {
+        }
+    }
+
+
+    private fun playNextClip() {
+
+        val file = audioQueue.removeFirstOrNull() ?: return
+
+        try {
+
+            mediaPlayer =
+                MediaPlayer().apply {
+
+                    setDataSource(file.absolutePath)
+
+                    setOnCompletionListener { player ->
+                        player.release()
+                        file.delete()
+                        if (mediaPlayer === player) {
+                            mediaPlayer = null
+                        }
+                        playNextClip()
+                    }
+
+                    prepare()
+                    start()
+                }
+
+        } catch (_: Exception) {
+
+            file.delete()
+            mediaPlayer = null
+            playNextClip()
+        }
+    }
+
+
+    private fun stopCurrentPlayer() {
+
+        mediaPlayer?.let {
+            try {
+                if (it.isPlaying) it.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                it.release()
+            } catch (_: Exception) {
+            }
+        }
+
+        mediaPlayer = null
+    }
+
+
+    private fun clearAudioQueue() {
+
+        while (audioQueue.isNotEmpty()) {
+            audioQueue.removeFirst().delete()
         }
     }
 
@@ -1466,6 +1672,11 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(
                 SystemMetrics()
             )
+
+        // Sign language mode
+        val signCaption = mutableStateOf("")
+        val signCaptionEnglish = mutableStateOf("")
+        val signStatus = mutableStateOf("Show your hands to sign")
     }
 }
 
@@ -1482,6 +1693,18 @@ fun ArgusScreen(
     onDisconnect: () -> Unit,
 
     onMode: (String) -> Unit,
+
+    currentMode: String,
+
+    ocrMode: Boolean,
+
+    onOcrToggle: () -> Unit,
+
+    onSignAction: (String) -> Unit,
+
+    serverUrl: String,
+
+    onServerUrlChange: (String) -> Unit,
 
     onVoiceToggle: () -> Unit,
 
@@ -1699,6 +1922,70 @@ fun ArgusScreen(
 
 
             // =================================================
+            // SIGN LANGUAGE CAPTION
+            // =================================================
+
+            if (currentMode == "slt") {
+
+                Column(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(GlassCard)
+                            .padding(12.dp)
+                ) {
+
+                    Text(
+                        MainActivity.signStatus.value,
+                        color = ArgusSubtext,
+                        fontSize = 11.sp
+                    )
+
+                    if (MainActivity.signCaption.value.isNotBlank()) {
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            MainActivity.signCaption.value,
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        if (MainActivity.signCaptionEnglish.value.isNotBlank()) {
+                            Text(
+                                MainActivity.signCaptionEnglish.value,
+                                color = ArgusTeal,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+                        OutlinedButton(
+                            onClick = { onSignAction("translate") },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
+                        ) {
+                            Text("TRANSLATE NOW", color = Color.White, fontSize = 10.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = { onSignAction("clear") },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
+                        ) {
+                            Text("CLEAR", color = Color.White, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+
+
+            // =================================================
             // CHAT
             // =================================================
 
@@ -1849,18 +2136,17 @@ fun ArgusScreen(
                 ) {
 
                     listOf(
-                        "SCREEN",
-                        "LIVE",
-                        "ASSIST"
-                    ).forEach { mode ->
+                        "SCREEN" to "screen",
+                        "LIVE" to "live",
+                        "ASSIST" to "assistive",
+                        "SIGN" to "slt"
+                    ).forEach { (label, mode) ->
 
                         TextButton(
 
                             onClick = {
 
-                                onMode(
-                                    mode.lowercase()
-                                )
+                                onMode(mode)
                             },
 
                             contentPadding =
@@ -1871,10 +2157,11 @@ fun ArgusScreen(
 
                             Text(
 
-                                mode,
+                                label,
 
                                 color =
-                                    ArgusSubtext,
+                                    if (currentMode == mode) ArgusGreen
+                                    else ArgusSubtext,
 
                                 fontSize = 11.sp,
 
@@ -2018,6 +2305,42 @@ fun ArgusScreen(
                     }
 
 
+                    // OCR: next question is read from a sharp full-resolution photo
+
+                    OutlinedButton(
+
+                        onClick =
+                            onOcrToggle,
+
+                        modifier =
+                            Modifier
+                                .weight(0.8f)
+                                .height(46.dp),
+
+                        shape =
+                            RoundedCornerShape(
+                                24.dp
+                            ),
+
+                        border =
+                            androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                if (ocrMode) ArgusGreen else Color(0xFF444455)
+                            ),
+
+                        contentPadding =
+                            PaddingValues(0.dp)
+                    ) {
+
+                        Text(
+                            "OCR",
+                            color = if (ocrMode) ArgusGreen else Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+
                     // FLIP
 
                     OutlinedButton(
@@ -2058,6 +2381,33 @@ fun ArgusScreen(
                                 FontWeight.Bold
                         )
                     }
+                }
+
+
+                // =================================================
+                // SERVER ADDRESS (editable while disconnected)
+                // =================================================
+
+                val connected =
+                    MainActivity.connectionStatus.value.contains("Connected")
+
+                if (!connected) {
+
+                    var draftUrl by remember(serverUrl) { mutableStateOf(serverUrl) }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    OutlinedTextField(
+                        value = draftUrl,
+                        onValueChange = {
+                            draftUrl = it
+                            onServerUrlChange(it)
+                        },
+                        singleLine = true,
+                        label = { Text("PC server address", fontSize = 10.sp) },
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 12.sp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
