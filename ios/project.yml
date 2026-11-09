@@ -1,0 +1,54 @@
+# XcodeGen spec for the ARGUS iPhone app.
+# Generate the Xcode project with:  xcodegen generate   (run inside this ios/ folder)
+name: ARGUS
+options:
+  bundleIdPrefix: edu.nsu.argus
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  ARGUS:
+    type: application
+    platform: iOS
+    sources:
+      - path: ARGUS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: edu.nsu.argus.companion
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: ARGUS/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_BITCODE: NO
+    info:
+      path: ARGUS/Info.plist
+      properties:
+        CFBundleDisplayName: A.R.G.U.S.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true
+        UIBackgroundModes: [audio]
+        NSCameraUsageDescription: ARGUS sends camera frames to your ARGUS PC so it can describe what you see, read text and translate sign language.
+        NSMicrophoneUsageDescription: ARGUS listens for "Hey Argus" and your questions.
+        NSSpeechRecognitionUsageDescription: ARGUS turns your voice into text questions on the phone.
+        NSLocalNetworkUsageDescription: ARGUS connects to the ARGUS server running on your PC over Wi-Fi or hotspot.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+schemes:
+  ARGUS:
+    build:
+      targets:
+        ARGUS: all
+    run:
+      config: Debug
+    archive:
+      config: Release

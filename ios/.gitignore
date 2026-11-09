@@ -1,0 +1,6 @@
+ARGUS.xcodeproj/
+build/
+Payload/
+*.ipa
+xcodebuild.log
+ARGUS/Info.plist
