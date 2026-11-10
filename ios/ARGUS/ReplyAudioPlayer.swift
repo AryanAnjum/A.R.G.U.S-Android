@@ -4,6 +4,11 @@ import AVFoundation
 /// A clip for a new request replaces whatever was still playing from the previous reply.
 final class ReplyAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var isPlaying = false
+    /// When the last clip stopped. The mic ignores speech for a moment after it, because the tail of
+    /// ARGUS's own voice is still in the recognizer.
+    private(set) var lastSoundEnd = Date.distantPast
+    /// Called on the main queue when ARGUS starts or stops talking (not between sentences of one reply).
+    var onTalkingChanged: ((Bool) -> Void)?
 
     private var queue: [Data] = []
     private var player: AVAudioPlayer?
@@ -23,13 +28,20 @@ final class ReplyAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate 
         queue.removeAll()
         player?.stop()
         player = nil
-        isPlaying = false
+        setPlaying(false)
+    }
+
+    private func setPlaying(_ on: Bool) {
+        if !on && isPlaying { lastSoundEnd = Date() }
+        guard on != isPlaying else { return }
+        isPlaying = on
+        onTalkingChanged?(on)
     }
 
     private func playNext() {
         guard !queue.isEmpty else {
             player = nil
-            isPlaying = false
+            setPlaying(false)
             return
         }
         let data = queue.removeFirst()
@@ -39,7 +51,7 @@ final class ReplyAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate 
             p.delegate = self
             p.prepareToPlay()
             player = p
-            isPlaying = true
+            setPlaying(true)
             if !p.play() { playNext() }
         } catch {
             playNext()

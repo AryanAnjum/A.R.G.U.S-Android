@@ -70,6 +70,19 @@ final class SpeechListener: NSObject, ObservableObject {
         partial = ""
     }
 
+    /// Throws away whatever has been heard so far (ARGUS's own voice) and starts listening afresh.
+    func discardCurrentPhrase() {
+        guard isListening else { return }
+        silenceTimer?.invalidate()
+        latestText = ""
+        partial = ""
+        request?.endAudio()
+        request = nil
+        task?.cancel()
+        task = nil
+        beginTask()
+    }
+
     private func beginTask() {
         guard isListening, let recognizer else { return }
         task?.cancel()

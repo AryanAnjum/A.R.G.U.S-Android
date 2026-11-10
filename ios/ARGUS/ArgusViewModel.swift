@@ -43,6 +43,18 @@ final class ArgusViewModel: ObservableObject {
     /// Read on the camera queue, so kept outside the main actor.
     private let frameGate = FrameGate()
 
+    /// How long after ARGUS's voice stops the mic keeps ignoring speech (room echo, recognizer lag).
+    private static let echoTail: TimeInterval = 1.2
+    /// Until when a reply's voice is still expected (between its text and its first audio clip).
+    private var replyAudioDue = Date.distantPast
+
+    /// True while ARGUS is speaking, between two sentences of a reply, or just after it finished.
+    private var isArgusTalking: Bool {
+        let now = Date()
+        return audio.isPlaying || now < replyAudioDue
+            || now.timeIntervalSince(audio.lastSoundEnd) < Self.echoTail
+    }
+
     init() {
         socket.onState = { [weak self] s in
             guard let self else { return }
@@ -61,6 +73,18 @@ final class ArgusViewModel: ObservableObject {
         finder.start()
         socket.onEvent = { [weak self] e in self?.handle(e) }
         speech.onPhrase = { [weak self] p in self?.handlePhrase(p) }
+        // Echo guard: when ARGUS starts or stops talking, drop what the mic heard so far, because
+        // on the loudspeaker that is ARGUS's own voice, not the user.
+        audio.onTalkingChanged = { [weak self] talking in
+            guard let self else { return }
+            self.speech.discardCurrentPhrase()
+            if !talking {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.echoTail) { [weak self] in
+                    guard let self, !self.audio.isPlaying else { return }
+                    self.speech.discardCurrentPhrase()
+                }
+            }
+        }
         speech.onError = { [weak self] m in self?.system(m) }
         frameGate.update(mode: mode)
 
@@ -183,6 +207,7 @@ final class ArgusViewModel: ObservableObject {
         case "argus_reply_delta":
             appendDelta(id: e.string("id"), text: e.string("text"))
         case "argus_reply":
+            replyAudioDue = Date().addingTimeInterval(4)  // its voice usually starts within a few seconds
             thinking = false
             finishReply(id: e.string("id"), text: e.string("text"))
         case "speech_recognized":
@@ -193,6 +218,7 @@ final class ArgusViewModel: ObservableObject {
         case "system_metrics":
             updateMetrics(e)
         case "tts_audio":
+            replyAudioDue = .distantPast  // playback (and the tail after it) now guards the mic
             audio.enqueue(base64: e.string("audio_base64"), requestId: e.string("request_id"))
         case "guide_status":
             guiding = e.bool("on")
@@ -358,7 +384,7 @@ final class ArgusViewModel: ObservableObject {
             return
         }
         // While ARGUS is talking, ignore anything but stop so it doesn't answer its own voice.
-        if audio.isPlaying { return }
+        if isArgusTalking { return }
 
         add(.you, phrase)
         if !awake {
@@ -410,6 +436,7 @@ final class ArgusViewModel: ObservableObject {
     }
 
     func stopTalking() {
+        replyAudioDue = .distantPast
         audio.stop()
         thinking = false
         socket.send(["event": "stop"])
