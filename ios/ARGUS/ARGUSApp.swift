@@ -14,6 +14,7 @@ struct ARGUSApp: App {
                     UIApplication.shared.isIdleTimerDisabled = true  // the screen stays on while ARGUS watches
                     model.connect()
                 }
+                .onOpenURL { model.open(link: $0) }
                 .onChange(of: phase) { p in
                     if p == .active { model.connect() }
                 }

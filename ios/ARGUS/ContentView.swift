@@ -22,7 +22,7 @@ struct ContentView: View {
             VStack(spacing: 10) {
                 header
                 modePicker
-                if model.mode == .slt { signPanel }
+                if model.scanningQR { scanBanner } else if model.mode == .slt { signPanel }
                 Spacer(minLength: 0)
                 transcript
                 inputRow
@@ -100,8 +100,25 @@ struct ContentView: View {
         switch model.connection {
         case .connected: return model.guiding ? "Connected • Guiding" : "Connected • \(model.mode.title)"
         case .connecting: return "Connecting…"
-        case .disconnected: return "Offline • tap ⚙︎ to set the PC address"
+        case .disconnected: return "Offline • tap ⚙︎ to connect to your PC"
         }
+    }
+
+    private var scanBanner: some View {
+        VStack(spacing: 10) {
+            Label("Point the camera at the QR code", systemImage: "qrcode.viewfinder")
+                .font(.headline).foregroundColor(.white)
+            Text("On the PC, press Connect phone to show it.")
+                .font(.footnote).foregroundColor(.argusSubtext)
+            Button("Cancel") { model.stopQRScan() }
+                .font(.footnote.weight(.semibold)).foregroundColor(.black)
+                .padding(.horizontal, 18).padding(.vertical, 7)
+                .background(Capsule().fill(Color.argusGreen))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color.glass))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.argusGreen.opacity(0.5)))
     }
 
     // MARK: Modes
@@ -317,41 +334,90 @@ struct ContentView: View {
 struct SettingsView: View {
     @EnvironmentObject var model: ArgusViewModel
     @Environment(\.dismiss) private var dismiss
-    @State private var url = ""
+    @State private var address = ""
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("ws://192.168.1.10:8000/ws", text: $url)
-                        .keyboardType(.URL)
+                    if model.finder.servers.isEmpty {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Looking for ARGUS on this network…").foregroundColor(.secondary)
+                        }
+                    }
+                    ForEach(model.finder.servers) { server in
+                        Button {
+                            model.connect(to: server)
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Image(systemName: "desktopcomputer").foregroundColor(.argusGreen)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(server.name).foregroundColor(.primary)
+                                    Text(server.urls.first?.replacingOccurrences(of: "ws://", with: "")
+                                        .replacingOccurrences(of: "/ws", with: "") ?? "")
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if model.connection == .connected && server.name == model.pcName {
+                                    Image(systemName: "checkmark.circle.fill").foregroundColor(.argusGreen)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("PCs on this network")
+                } footer: {
+                    Text("Start ARGUS on your PC and put the phone on the same Wi-Fi, or join the PC to this phone's hotspot. "
+                         + "The phone sends your voice and camera; the models run on the PC.")
+                }
+
+                Section {
+                    Button {
+                        model.startQRScan()
+                        dismiss()
+                    } label: {
+                        Label("Scan QR code", systemImage: "qrcode.viewfinder")
+                    }
+                } footer: {
+                    Text("In the PC app press Connect phone, then point this phone at the QR code.")
+                }
+
+                Section {
+                    TextField("192.168.1.10", text: $address)
+                        .keyboardType(.numbersAndPunctuation)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    Button("Connect to this address") {
+                        model.reconnect(to: normalized(address))
+                        dismiss()
+                    }
+                    .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty)
                 } header: {
-                    Text("ARGUS server")
+                    Text("Or type the PC's address")
                 } footer: {
-                    Text("Start ARGUS on your PC, then enter the PC's IP address on the same Wi-Fi or hotspot. "
-                         + "On Windows, run ipconfig and use the IPv4 address. Port 8000, path /ws.")
+                    Text("It is shown in the PC app's Connect phone panel. Port 8000 is added for you.")
                 }
-                Section("GPU") {
-                    LabeledContent("Card", value: model.metrics.gpuName.isEmpty ? "--" : model.metrics.gpuName)
-                    LabeledContent("Last reply latency", value: model.metrics.latency == "--" ? "--" : "\(model.metrics.latency) ms")
+
+                Section("Connected PC") {
+                    LabeledContent("Name", value: model.pcName.isEmpty ? "--" : model.pcName)
+                    LabeledContent("GPU", value: model.metrics.gpuName.isEmpty ? "--" : model.metrics.gpuName)
+                    LabeledContent("Last reply", value: model.metrics.latency == "--" ? "--" : "\(model.metrics.latency) ms")
                 }
                 Section {
                     Button("Clear conversation", role: .destructive) { model.clearChat() }
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("Connect to PC")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Connect") {
-                        model.reconnect(to: normalized(url))
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-            .onAppear { url = model.serverURL }
+            .onAppear {
+                address = model.serverURL.replacingOccurrences(of: "ws://", with: "")
+                    .replacingOccurrences(of: ":8000/ws", with: "").replacingOccurrences(of: "/ws", with: "")
+            }
         }
     }
 

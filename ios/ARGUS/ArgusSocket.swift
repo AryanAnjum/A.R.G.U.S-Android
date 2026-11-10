@@ -6,13 +6,17 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
 
     var onEvent: (([String: Any]) -> Void)?
     var onState: ((State) -> Void)?
-    /// Called on every (re)connect so the app can send its hello.
-    var onOpen: (() -> Void)?
+    /// Called on every (re)connect, with the address that worked, so the app can send its hello.
+    var onOpen: ((String) -> Void)?
 
     private var session: URLSession!
     private var task: URLSessionWebSocketTask?
-    private var url: URL?
+    /// Addresses of the same PC (it may have Wi-Fi and Ethernet); tried in turn until one opens.
+    private var urls: [URL] = []
+    private var urlIndex = 0
     private var wantConnected = false
+    /// True once the current connection has opened (false while an address is still being tried).
+    private var opened = false
     private var generation = 0
     private let queue = DispatchQueue(label: "argus.socket")
     /// Frames in flight; camera frames are dropped while the link is busy so latency stays low.
@@ -27,14 +31,17 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
-    func connect(to urlString: String) {
+    func connect(to urlString: String) { connect(toAny: [urlString]) }
+
+    /// Connects to the first address that answers and keeps retrying all of them until one does.
+    func connect(toAny urlStrings: [String]) {
         queue.async {
             self.disconnectLocked()
-            guard let url = URL(string: urlString.trimmingCharacters(in: .whitespaces)) else {
-                self.emitState(.disconnected)
-                return
-            }
-            self.url = url
+            let urls = urlStrings.compactMap { URL(string: $0.trimmingCharacters(in: .whitespaces)) }
+                .filter { $0.host != nil }
+            guard !urls.isEmpty else { return }
+            self.urls = urls
+            self.urlIndex = 0
             self.wantConnected = true
             self.openLocked()
         }
@@ -46,6 +53,7 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
 
     private func disconnectLocked() {
         wantConnected = false
+        opened = false
         generation += 1
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -53,12 +61,12 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func openLocked() {
-        guard wantConnected, let url else { return }
+        guard wantConnected, !urls.isEmpty else { return }
         generation += 1
         let gen = generation
         emitState(.connecting)
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8
+        var request = URLRequest(url: urls[urlIndex % urls.count])
+        request.timeoutInterval = urls.count > 1 ? 4 : 8
         let t = session.webSocketTask(with: request)
         t.maximumMessageSize = 32 * 1024 * 1024  // reply audio clips can be a few MB
         task = t
@@ -66,8 +74,10 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
         receive(on: t, generation: gen)
     }
 
-    private func scheduleReconnect(generation gen: Int) {
-        queue.asyncAfter(deadline: .now() + 2) {
+    private func scheduleReconnect(generation gen: Int, opened: Bool) {
+        // An address that never opened: move on to the next one quickly. A dropped link: retry it.
+        if !opened && urls.count > 1 { urlIndex = (urlIndex + 1) % urls.count }
+        queue.asyncAfter(deadline: .now() + (opened || urls.count == 1 ? 2 : 0.3)) {
             guard self.wantConnected, gen == self.generation else { return }
             self.openLocked()
         }
@@ -79,10 +89,12 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
             switch result {
             case .failure:
                 self.queue.async {
-                    guard gen == self.generation else { return }
+                    guard gen == self.generation, t === self.task else { return }
+                    let opened = self.opened
+                    self.opened = false
                     self.task = nil
-                    self.emitState(.disconnected)
-                    self.scheduleReconnect(generation: gen)
+                    self.emitState(opened || self.urls.count == 1 ? .disconnected : .connecting)
+                    self.scheduleReconnect(generation: gen, opened: opened)
                 }
             case .success(let message):
                 var data: Data?
@@ -104,8 +116,10 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
         queue.async {
             guard webSocketTask === self.task else { return }
             self.lock.lock(); self.pendingFrames = 0; self.lock.unlock()
+            self.opened = true
+            let url = self.urls[self.urlIndex % self.urls.count].absoluteString
             self.emitState(.connected)
-            DispatchQueue.main.async { self.onOpen?() }
+            DispatchQueue.main.async { self.onOpen?(url) }
         }
     }
 
@@ -113,9 +127,11 @@ final class ArgusSocket: NSObject, URLSessionWebSocketDelegate {
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         queue.async {
             guard webSocketTask === self.task else { return }
+            let opened = self.opened
+            self.opened = false
             self.task = nil
             self.emitState(.disconnected)
-            self.scheduleReconnect(generation: self.generation)
+            self.scheduleReconnect(generation: self.generation, opened: opened)
         }
     }
 

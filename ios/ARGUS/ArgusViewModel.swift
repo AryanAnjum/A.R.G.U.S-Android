@@ -6,7 +6,12 @@ import SwiftUI
 @MainActor
 final class ArgusViewModel: ObservableObject {
     // Connection
-    @AppStorage("ws_url") var serverURL = "ws://172.20.10.3:8000/ws"
+    /// The PC's address that last worked, the other addresses of that PC, and its name.
+    @AppStorage("ws_url") var serverURL = ""
+    @AppStorage("ws_urls") private var savedURLs = ""
+    @AppStorage("pc_name") var pcName = ""
+    @Published private(set) var scanningQR = false
+    private var connectedThisSession = false
     @Published var connection: ArgusSocket.State = .disconnected
     @Published var metrics = ServerMetrics()
 
@@ -30,6 +35,8 @@ final class ArgusViewModel: ObservableObject {
     let camera = CameraManager()
     let speech = SpeechListener()
     let audio = ReplyAudioPlayer()
+    /// Lists ARGUS PCs on the same Wi-Fi or hotspot.
+    let finder = ServerFinder()
     private let socket = ArgusSocket()
     private var bag = Set<AnyCancellable>()
 
@@ -42,7 +49,16 @@ final class ArgusViewModel: ObservableObject {
             self.connection = s
             self.frameGate.update(connected: s == .connected)
         }
-        socket.onOpen = { [weak self] in self?.sendHello() }
+        socket.onOpen = { [weak self] url in
+            guard let self else { return }
+            self.serverURL = url
+            self.connectedThisSession = true
+            self.sendHello()
+        }
+        camera.onQRCode = { [weak self] text in self?.scanned(text) }
+        finder.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &bag)
+        finder.$servers.receive(on: DispatchQueue.main).sink { [weak self] s in self?.serversChanged(s) }.store(in: &bag)
+        finder.start()
         socket.onEvent = { [weak self] e in self?.handle(e) }
         speech.onPhrase = { [weak self] p in self?.handlePhrase(p) }
         speech.onError = { [weak self] m in self?.system(m) }
@@ -67,21 +83,84 @@ final class ArgusViewModel: ObservableObject {
 
     // MARK: - Connection
 
-    /// Connects unless already connected or connecting (the app calls this whenever it comes to the front).
+    private var savedURLList: [String] {
+        let list = savedURLs.split(separator: ",").map(String.init)
+        return list.isEmpty && !serverURL.isEmpty ? [serverURL] : list
+    }
+
+    /// Connects to the saved PC unless already connected or connecting
+    /// (the app calls this whenever it comes to the front).
     func connect() {
-        guard connection == .disconnected else { return }
-        socket.connect(to: serverURL)
+        finder.start()
+        guard connection == .disconnected, !savedURLList.isEmpty else { return }
+        // Try the address that worked last time first.
+        let saved = savedURLList
+        socket.connect(toAny: saved.contains(serverURL) ? [serverURL] + saved.filter { $0 != serverURL } : saved)
+    }
+
+    /// Connects to a PC picked from the list, scanned from the QR code, or typed in.
+    func connect(to server: ArgusServer) {
+        pcName = server.name
+        savedURLs = server.urls.joined(separator: ",")
+        serverURL = server.urls.first ?? ""
+        connectedThisSession = false
+        socket.connect(toAny: server.urls)
     }
 
     func reconnect(to url: String) {
-        serverURL = url
-        socket.connect(to: url)
+        guard let server = ArgusServer(link: url) else {
+            system("That address doesn't look right. Use the PC's IP, for example 192.168.1.10.")
+            return
+        }
+        connect(to: server)
+    }
+
+    /// PCs found on the network changed. Connects by itself when the choice is obvious:
+    /// the saved PC got a new address, or there is exactly one PC and nothing has worked yet.
+    private func serversChanged(_ servers: [ArgusServer]) {
+        guard connection != .connected, !scanningQR, !servers.isEmpty else { return }
+        if !pcName.isEmpty, let same = servers.first(where: { $0.name == pcName }) {
+            if same.urls != savedURLList { connect(to: same) }
+            return
+        }
+        if (savedURLList.isEmpty || !connectedThisSession) && servers.count == 1 {
+            connect(to: servers[0])
+        }
+    }
+
+    // MARK: - Pairing with the QR code in the PC app's Connect phone panel
+
+    func startQRScan() {
+        scanningQR = true
+        camera.start()
+        camera.scanForQRCodes(true)
+    }
+
+    func stopQRScan() {
+        scanningQR = false
+        camera.scanForQRCodes(false)
+    }
+
+    private func scanned(_ text: String) {
+        guard scanningQR, let server = ArgusServer(link: text) else { return }
+        stopQRScan()
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        system("Found \(server.name). Connecting…")
+        connect(to: server)
+    }
+
+    /// The iPhone Camera app opened an `argus://connect?...` link from the PC's QR code.
+    func open(link: URL) {
+        guard let server = ArgusServer(link: link.absoluteString) else { return }
+        system("Connecting to \(server.name)…")
+        connect(to: server)
     }
 
     private func sendHello() {
-        socket.send(["event": "hello", "client": "phone", "mode": mode.rawValue, "features": ["audio_queue"]])
+        socket.send(["event": "hello", "client": "phone", "mode": mode.rawValue, "features": ["audio_queue"],
+                     "device": UIDevice.current.name, "platform": "ios"])
         if mode == .slt { socket.send(["event": "set_mode", "mode": "slt", "language": signLanguage]) }
-        system("Connected to ARGUS.")
+        system(pcName.isEmpty ? "Connected to ARGUS." : "Connected to ARGUS on \(pcName).")
     }
 
     // MARK: - Server events
@@ -94,6 +173,8 @@ final class ArgusViewModel: ObservableObject {
             if let m = e["metrics"] as? [String: Any] { updateMetrics(m) }
             metrics.gpuName = e.string("gpu_name", metrics.gpuName)
             metrics.vramTotal = e.string("vram_total", metrics.vramTotal)
+            let serverName = e.string("server_name")
+            if !serverName.isEmpty { pcName = serverName }
         case "mode_changed":
             if let m = ArgusMode(rawValue: e.string("mode")) { applyMode(m, tellServer: false) }
         case "argus_reply_start":

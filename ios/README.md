@@ -1,7 +1,9 @@
 # A.R.G.U.S. for iPhone
 
-A native SwiftUI twin of the Android companion app. It talks to the same ARGUS server
-(`src/allnew.py` in Project_A-R-G-U-S) over the same WebSocket protocol, so nothing changes on the PC.
+A native SwiftUI twin of the Android companion app. The phone is only the front end: it sends your
+voice and the camera to the ARGUS PC on the same network and shows and speaks the answers. Every
+model runs on the PC (`src/allnew.py` in Project_A-R-G-U-S), over the same WebSocket protocol the
+Android app uses.
 
 ## What it does
 
@@ -16,6 +18,7 @@ A native SwiftUI twin of the Android companion app. It talks to the same ARGUS s
 | Guide | Walking guidance for a blind user (`guide` on/off). Warnings show in orange with a haptic buzz. |
 | Sign language | Live caption, English translation, signing status, language picker (German now, Bangla when ready), Translate now and Clear. |
 | Metrics | VRAM, GPU temperature and last reply latency from the server. |
+| Finding the PC | Lists ARGUS PCs on the same network by itself (Bonjour, `_argus._tcp`), scans the QR code from the PC app's **Connect phone** panel, or takes a typed address. It remembers the PC and follows it when its IP address changes. |
 
 ## Build it without a Mac
 
@@ -40,9 +43,12 @@ With a free Apple ID the app stops opening after 7 days. Run Sideloadly again to
 
 1. Start ARGUS on the PC (`ARGUS.bat` or the desktop app). Allow it through Windows Firewall on **private** networks.
 2. Put the iPhone and the PC on the same Wi-Fi, or connect the PC to the iPhone's hotspot.
-3. On the PC run `ipconfig` and note the IPv4 address.
-4. In the app tap the gear, enter the address (for example `192.168.1.10`; the app fills in `ws://…:8000/ws`) and tap **Connect**.
-5. Allow Camera, Microphone, Speech Recognition and Local Network when iOS asks. If you tapped "Don't Allow" for Local Network, turn it on in **Settings > ARGUS**.
+3. Open the app and allow Local Network when iOS asks. With one ARGUS PC on the network it connects by itself.
+4. Otherwise tap the gear and pick the PC under **PCs on this network**, or:
+   - press **Connect phone** in the PC app, tap **Scan QR code** on the phone and point it at the code
+     (the iPhone's own Camera app also works: it opens ARGUS from the code), or
+   - type the address shown in that panel (for example `192.168.1.10`; the app fills in `ws://…:8000/ws`).
+5. Allow Camera, Microphone and Speech Recognition when iOS asks. If you tapped "Don't Allow" for Local Network, turn it on in **Settings > ARGUS**.
 
 ## With a Mac instead
 
@@ -56,8 +62,9 @@ Pick your Apple ID under Signing & Capabilities, choose the iPhone and press Run
 ## Files
 
 - `ARGUS/ArgusViewModel.swift`: app state, server events, voice flow, prompts and OCR photos
-- `ARGUS/ArgusSocket.swift`: WebSocket with auto-reconnect and frame dropping when the link is busy
-- `ARGUS/CameraManager.swift`: camera preview, frame encoding, sharp photos
+- `ARGUS/ArgusSocket.swift`: WebSocket with auto-reconnect, several addresses per PC, and frame dropping when the link is busy
+- `ARGUS/ServerFinder.swift`: finds ARGUS PCs on the network and reads pairing links (`argus://connect?h=…&p=8000&n=…`)
+- `ARGUS/CameraManager.swift`: camera preview, frame encoding, sharp photos, QR code reading
 - `ARGUS/SpeechListener.swift`: continuous speech recognition and the audio session
 - `ARGUS/ReplyAudioPlayer.swift`: plays reply audio in order
 - `ARGUS/Commands.swift`: wake word, stop, sleep and reading-question rules (same as Android)

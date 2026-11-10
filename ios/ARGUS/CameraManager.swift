@@ -5,7 +5,7 @@ import UIKit
 
 /// Back camera: a live preview, throttled upright JPEG frames for the server, and sharp photos for OCR.
 final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate,
-                           AVCapturePhotoCaptureDelegate {
+                           AVCapturePhotoCaptureDelegate, AVCaptureMetadataOutputObjectsDelegate {
     let session = AVCaptureSession()
     @Published private(set) var isRunning = false
 
@@ -16,6 +16,9 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private let videoQueue = DispatchQueue(label: "argus.camera.frames")
     private let videoOutput = AVCaptureVideoDataOutput()
     private let photoOutput = AVCapturePhotoOutput()
+    private let metadataOutput = AVCaptureMetadataOutput()
+    /// Called on the main queue with the text of a QR code while `scanForQRCodes(true)` is on.
+    var onQRCode: ((String) -> Void)?
     private var configured = false
     private var photoHandlers: [Int64: (Data?) -> Void] = [:]
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -60,6 +63,10 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             session.addOutput(photoOutput)
             photoOutput.maxPhotoQualityPrioritization = .quality
         }
+        if session.canAddOutput(metadataOutput) {
+            session.addOutput(metadataOutput)
+            metadataOutput.setMetadataObjectsDelegate(self, queue: .main)
+        }
         // Frames arrive upright in portrait, so the model never sees sideways text.
         for output in [videoOutput as AVCaptureOutput, photoOutput] {
             if let conn = output.connection(with: .video), conn.isVideoOrientationSupported {
@@ -67,6 +74,25 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             }
         }
         configured = true
+    }
+
+    /// Turns QR code reading on or off (used to pair with the PC's Connect phone panel).
+    func scanForQRCodes(_ on: Bool) {
+        sessionQueue.async {
+            guard self.configured, self.session.outputs.contains(self.metadataOutput) else { return }
+            let canReadQR = self.metadataOutput.availableMetadataObjectTypes.contains(.qr)
+            self.metadataOutput.metadataObjectTypes = on && canReadQR ? [.qr] : []
+        }
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject],
+                        from connection: AVCaptureConnection) {
+        for object in metadataObjects {
+            if let code = object as? AVMetadataMachineReadableCodeObject, let text = code.stringValue {
+                onQRCode?(text)
+                return
+            }
+        }
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,

@@ -40,6 +40,10 @@ targets:
         NSMicrophoneUsageDescription: ARGUS listens for "Hey Argus" and your questions.
         NSSpeechRecognitionUsageDescription: ARGUS turns your voice into text questions on the phone.
         NSLocalNetworkUsageDescription: ARGUS connects to the ARGUS server running on your PC over Wi-Fi or hotspot.
+        NSBonjourServices: ["_argus._tcp"]
+        CFBundleURLTypes:
+          - CFBundleURLName: edu.nsu.argus.connect
+            CFBundleURLSchemes: [argus]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
