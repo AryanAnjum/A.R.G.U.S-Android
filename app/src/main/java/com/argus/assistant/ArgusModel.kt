@@ -617,25 +617,44 @@ class ArgusModel(private val app: Application) {
         return (if (url.startsWith("wss")) "https://" else "http://") + hostPort
     }
 
-    /** Shows what the head-mount camera sees by fetching its picture from the PC a few times a second. */
+    /**
+     * Shows what the head-mount camera sees. Each request tells the PC which picture is already on screen
+     * ("after"), and the PC answers as soon as it has a newer one, so the view runs at the camera's pace.
+     */
     private fun startHeadView() {
         if (remoteRunning) return
         val base = httpBase() ?: return
         remoteRunning = true
         val token = ++remoteToken
         val thread = Thread({
+            var after = ""
             while (token == remoteToken) {
+                var status = 0
                 val bitmap = try {
-                    viewHttp.newCall(Request.Builder().url("$base/camera/head.jpg?w=720").build()).execute().use { r ->
-                        if (r.code == 200) r.body?.byteStream()?.let { BitmapFactory.decodeStream(it) } else null
+                    val url = "$base/camera/head.jpg?w=720" + if (after.isEmpty()) "" else "&after=$after"
+                    viewHttp.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                        status = r.code
+                        if (r.code == 200) {
+                            after = r.header("X-Frame-Time") ?: ""
+                            r.body?.byteStream()?.let { BitmapFactory.decodeStream(it) }
+                        } else null
                     }
                 } catch (e: Exception) {
                     null
                 }
                 if (token != remoteToken) break
-                main.post { if (token == remoteToken) remoteFrame = bitmap?.asImageBitmap() ?: remoteFrame }
+                if (bitmap != null) {
+                    val picture = bitmap.asImageBitmap()
+                    main.post { if (token == remoteToken) remoteFrame = picture }
+                }
+                // With "after" the PC already waited for a new picture, so ask again straight away.
+                val pause = when {
+                    bitmap != null -> if (after.isEmpty()) 90L else 0L
+                    status == 204 -> 100L
+                    else -> 500L
+                }
                 try {
-                    Thread.sleep(if (bitmap != null) 90L else 500L)
+                    if (pause > 0) Thread.sleep(pause)
                 } catch (e: InterruptedException) {
                     break
                 }
@@ -818,12 +837,14 @@ class FrameGate {
         val sign = ownSign || pcWants == "sign"
         val interval = when {
             sign -> FrameConfig.SIGN_INTERVAL_MS
+            pcWants.isNotEmpty() -> FrameConfig.PC_VIEW_INTERVAL_MS  // the PC shows this camera as video
             own && mode == ArgusMode.ASSISTIVE -> FrameConfig.ASSIST_INTERVAL_MS
             else -> FrameConfig.LIVE_INTERVAL_MS
         }
         val now = SystemClock.elapsedRealtime()
         if (now - lastSent < interval) return null
         lastSent = now
-        return if (sign) Spec(ownSign, true, FrameConfig.SIGN_PX, 70) else Spec(false, false, FrameConfig.LIVE_PX, 80)
+        return if (sign) Spec(ownSign, true, FrameConfig.SIGN_PX, 70)
+        else Spec(false, false, FrameConfig.LIVE_PX, if (pcWants.isNotEmpty()) 70 else 80)
     }
 }

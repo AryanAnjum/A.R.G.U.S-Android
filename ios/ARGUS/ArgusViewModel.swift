@@ -519,15 +519,30 @@ final class ArgusViewModel: ObservableObject {
         guard headTask == nil, let url = headURL() else { return }
         headTask = Task { [weak self] in
             let session = URLSession(configuration: .ephemeral)
+            // "after" names the picture already on screen: the PC then answers as soon as it has a newer
+            // one, so the view runs at the camera's own pace instead of asking on a timer.
+            var after = ""
             while !Task.isCancelled {
-                var image: UIImage?
-                if let (data, response) = try? await session.data(from: url),
-                   (response as? HTTPURLResponse)?.statusCode == 200 {
-                    image = UIImage(data: data)
+                var shown = false
+                var status = 0
+                var request = URLRequest(url: after.isEmpty ? url
+                                         : url.appending(queryItems: [URLQueryItem(name: "after", value: after)]))
+                request.timeoutInterval = 5
+                if let (data, response) = try? await session.data(for: request),
+                   let http = response as? HTTPURLResponse {
+                    status = http.statusCode
+                    if status == 200, let decoded = UIImage(data: data) {
+                        after = http.value(forHTTPHeaderField: "X-Frame-Time") ?? ""
+                        // Decode off the main thread so the buttons stay responsive while video plays.
+                        let image = await decoded.byPreparingForDisplay() ?? decoded
+                        if Task.isCancelled { break }
+                        self?.headImage = image
+                        shown = true
+                    }
                 }
                 if Task.isCancelled { break }
-                if let image { self?.headImage = image }
-                try? await Task.sleep(nanoseconds: image == nil ? 500_000_000 : 90_000_000)
+                let pauseMs: UInt64 = shown ? (after.isEmpty ? 90 : 0) : (status == 204 ? 100 : 500)
+                if pauseMs > 0 { try? await Task.sleep(nanoseconds: pauseMs * 1_000_000) }
             }
         }
     }
@@ -674,11 +689,13 @@ final class FrameGate: @unchecked Sendable {
         guard own || !pcWants.isEmpty else { return nil }
         let ownSign = own && mode == .slt
         let sign = ownSign || pcWants == "sign"
+        let pcView = !pcWants.isEmpty  // the PC shows this camera as video
         let interval = sign ? FrameConfig.signIntervalMs
+            : pcView ? FrameConfig.pcViewIntervalMs
             : (own && mode == .assistive ? FrameConfig.assistIntervalMs : FrameConfig.liveIntervalMs)
         let now = Date().timeIntervalSince1970 * 1000
         guard now - lastSent >= interval else { return nil }
         lastSent = now
-        return sign ? (ownSign, true, FrameConfig.signPx, 0.7) : (false, false, FrameConfig.livePx, 0.8)
+        return sign ? (ownSign, true, FrameConfig.signPx, 0.7) : (false, false, FrameConfig.livePx, pcView ? 0.7 : 0.8)
     }
 }

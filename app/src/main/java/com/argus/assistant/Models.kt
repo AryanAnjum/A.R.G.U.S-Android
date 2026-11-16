@@ -62,6 +62,7 @@ enum class ConnectionState { DISCONNECTED, CONNECTING, CONNECTED }
 object FrameConfig {
     const val LIVE_INTERVAL_MS = 800L      // background frame for normal questions
     const val ASSIST_INTERVAL_MS = 500L    // walking guidance looks more often
+    const val PC_VIEW_INTERVAL_MS = 125L   // the PC app is showing this phone's camera: about 8 pictures a second
     const val LIVE_PX = 1024               // long side of normal frames
     const val SIGN_INTERVAL_MS = 70L       // ~14 fps for sign language translation
     const val SIGN_PX = 640

@@ -88,6 +88,7 @@ struct ServerMetrics: Equatable {
 enum FrameConfig {
     static let liveIntervalMs: Double = 800      // background frame for normal questions
     static let assistIntervalMs: Double = 500    // walking guidance compares frames, so send more often
+    static let pcViewIntervalMs: Double = 125    // the PC app is showing this iPhone's camera: about 8 pictures a second
     static let livePx: CGFloat = 1024            // long side of normal frames
     static let signIntervalMs: Double = 70       // ~14 fps for sign language translation
     static let signPx: CGFloat = 640

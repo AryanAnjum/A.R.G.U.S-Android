@@ -57,9 +57,6 @@ struct ContentView: View {
             GeometryReader { geo in
                 ZStack {
                     Color.black
-                    Image(uiImage: image).resizable().scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height).clipped()
-                        .blur(radius: 18).opacity(0.55)                    // soft backdrop
                     Image(uiImage: image).resizable().scaledToFit()
                         .frame(width: geo.size.width, height: geo.size.height)  // the whole picture ARGUS sees
                 }
