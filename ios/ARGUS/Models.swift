@@ -16,10 +16,32 @@ enum ArgusMode: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .screen: return "desktopcomputer"
+        case .screen: return "iphone"
         case .live: return "eye"
         case .assistive: return "figure.walk"
         case .slt: return "hand.raised"
+        }
+    }
+}
+
+/// Where the pictures come from: one of the iPhone's own cameras, or the head-mount camera on the PC.
+enum CameraSource: String, CaseIterable, Identifiable {
+    case back, front, head
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .back: return "Back"
+        case .front: return "Front"
+        case .head: return "Head-mount"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .back: return "camera"
+        case .front: return "camera.rotate"
+        case .head: return "person.crop.square.badge.camera"
         }
     }
 }

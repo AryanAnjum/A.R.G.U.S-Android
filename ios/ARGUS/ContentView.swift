@@ -1,3 +1,4 @@
+import ReplayKit
 import SwiftUI
 
 extension Color {
@@ -22,7 +23,14 @@ struct ContentView: View {
             VStack(spacing: 10) {
                 header
                 modePicker
-                if model.scanningQR { scanBanner } else if model.mode == .slt { signPanel }
+                if model.scanningQR {
+                    scanBanner
+                } else if model.mode == .screen {
+                    screenPanel
+                } else {
+                    cameraPicker
+                    if model.mode == .slt { signPanel }
+                }
                 Spacer(minLength: 0)
                 transcript
                 inputRow
@@ -36,22 +44,84 @@ struct ContentView: View {
 
     // MARK: Background
 
+    private var headView: Bool {
+        !model.scanningQR && model.mode != .screen && model.cameraEnabled && model.cameraSource == .head
+    }
+
     @ViewBuilder private var background: some View {
-        if model.camera.isRunning {
+        let ownView = model.camera.isRunning && (model.scanningQR || (model.mode != .screen && !headView))
+        if headView, let image = model.headImage {
+            Image(uiImage: image).resizable().scaledToFill().ignoresSafeArea()
+                .accessibilityLabel("Head-mount camera")
+            shade
+        } else if ownView {
             CameraPreview(session: model.camera.session).ignoresSafeArea()
-            LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.75)],
-                           startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+            shade
         } else {
             LinearGradient(colors: [Color(red: 0.03, green: 0.04, blue: 0.06), .black],
                            startPoint: .top, endPoint: .bottom).ignoresSafeArea()
             VStack(spacing: 8) {
-                Image(systemName: model.mode == .screen ? "desktopcomputer" : "camera")
+                Image(systemName: model.mode == .screen ? "iphone" : (headView ? CameraSource.head.symbol : "camera"))
                     .font(.system(size: 44, weight: .light))
                     .foregroundStyle(argusGradient)
-                Text(model.mode == .screen ? "Screen mode looks at your PC screen" : "Camera is off")
-                    .font(.footnote).foregroundColor(.argusSubtext)
+                Text(model.mode == .screen
+                     ? (model.screenSharing ? "ARGUS can see this iPhone's screen" : "Screen mode looks at this iPhone's screen")
+                     : headView ? (model.headNote.isEmpty ? "Waiting for the head-mount camera…" : model.headNote)
+                     : "Camera is off")
+                    .font(.footnote).foregroundColor(.argusSubtext).multilineTextAlignment(.center).padding(.horizontal, 30)
             }
         }
+    }
+
+    private var shade: some View {
+        LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.75)],
+                       startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+    }
+
+    // MARK: Cameras and screen
+
+    /// Back camera, front camera, or the head-mount camera plugged into the PC.
+    private var cameraPicker: some View {
+        HStack(spacing: 4) {
+            ForEach(CameraSource.allCases) { source in
+                let selected = model.cameraEnabled && model.cameraSource == source
+                Button { model.selectCamera(source) } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: source.symbol).font(.system(size: 12, weight: .semibold))
+                        Text(source.title).font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                    }
+                    .padding(.vertical, 7).frame(maxWidth: .infinity)
+                    .foregroundColor(selected ? .black : .white)
+                    .background(Capsule().fill(selected ? Color.argusGreen.opacity(0.9) : Color.clear))
+                }
+                .accessibilityLabel("\(source.title) camera")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(Capsule().fill(Color.glass))
+    }
+
+    /// Screen mode: ARGUS looks at this iPhone's own screen, never the camera.
+    private var screenPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(model.screenSharing ? "Sharing this iPhone's screen" : "Screen mode uses this iPhone's screen",
+                  systemImage: "iphone")
+                .font(.caption.weight(.semibold)).foregroundColor(.argusTeal)
+            Text(model.screenSharing ? "Open any app and say \"Hey Argus, what's on my screen?\""
+                 : "Tap Share screen, pick ARGUS Screen and press Start Broadcast. The camera is not used.")
+                .font(.system(size: 14)).foregroundColor(.white)
+            HStack(spacing: 10) {
+                pill(model.screenSharing ? "Stop sharing" : "Share screen",
+                     model.screenSharing ? "stop.circle" : "rectangle.on.rectangle") {}
+                    .allowsHitTesting(false)
+                    .overlay(BroadcastButton().opacity(0.02))  // the real system button sits on top of the label
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color.glass))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.argusTeal.opacity(0.35)))
     }
 
     // MARK: Header
@@ -293,8 +363,8 @@ struct ContentView: View {
 
     private var controls: some View {
         HStack(alignment: .center) {
-            control(model.camera.isRunning ? "video.fill" : "video.slash.fill", "Camera",
-                    on: model.camera.isRunning) { model.toggleCamera() }
+            let cameraOn = model.cameraEnabled && model.mode != .screen
+            control(cameraOn ? "video.fill" : "video.slash.fill", "Camera", on: cameraOn) { model.toggleCamera() }
             Spacer()
             control("doc.text.viewfinder", "Read this", on: false) { model.readThis() }
             Spacer()
@@ -430,5 +500,26 @@ struct SettingsView: View {
         if !hostPort.contains(":") { s = s.replacingOccurrences(of: hostPort, with: hostPort + ":8000") }
         if !afterScheme.contains("/") { s += "/ws" }
         return s
+    }
+}
+
+/// The system "Start Broadcast" button, set to the ARGUS Screen extension. Starting and stopping the
+/// screen broadcast can only be done through it (iOS rule).
+struct BroadcastButton: UIViewRepresentable {
+    static let extensionID = "edu.nsu.argus.companion.screen"
+
+    func makeUIView(context: Context) -> RPSystemBroadcastPickerView {
+        let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 150, height: 34))
+        picker.preferredExtension = Self.extensionID
+        picker.showsMicrophoneButton = false
+        return picker
+    }
+
+    func updateUIView(_ uiView: RPSystemBroadcastPickerView, context: Context) {
+        // Stretch the picker's own button over the whole area so a tap anywhere on the label works.
+        for case let button as UIButton in uiView.subviews {
+            button.frame = uiView.bounds
+            button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        }
     }
 }

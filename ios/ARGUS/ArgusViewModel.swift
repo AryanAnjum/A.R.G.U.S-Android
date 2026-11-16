@@ -26,6 +26,25 @@ final class ArgusViewModel: ObservableObject {
     @Published private(set) var signCaptionEnglish = ""
     @Published private(set) var signStatus = "Show your hands to sign"
 
+    // Cameras
+    /// Back, front, or the head-mount camera that is plugged into the PC.
+    @AppStorage("camera") private var cameraRaw = CameraSource.back.rawValue
+    var cameraSource: CameraSource { CameraSource(rawValue: cameraRaw) ?? .back }
+    /// The Camera button: whether ARGUS should be looking at all.
+    @Published private(set) var cameraEnabled = false
+    /// Latest picture from the head-mount camera, shown while it is the chosen camera.
+    @Published private(set) var headImage: UIImage?
+    /// What the PC says about the head-mount camera when something is wrong with it.
+    @Published private(set) var headNote = ""
+    private var serverHasCameras = false
+    /// "", "live" or "sign": the PC app is using this iPhone's camera.
+    private var pcWantsPhone = ""
+    private var headTask: Task<Void, Never>?
+
+    // Screen mode: this iPhone's screen, shared by the ARGUS Screen broadcast (ReplayKit)
+    @Published private(set) var screenSharing = false
+    private var serverHasPhoneScreen = false
+
     // Conversation
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var thinking = false
@@ -60,6 +79,7 @@ final class ArgusViewModel: ObservableObject {
             guard let self else { return }
             self.connection = s
             self.frameGate.update(connected: s == .connected)
+            self.applyCamera()
         }
         socket.onOpen = { [weak self] url in
             guard let self else { return }
@@ -87,6 +107,8 @@ final class ArgusViewModel: ObservableObject {
         }
         speech.onError = { [weak self] m in self?.system(m) }
         frameGate.update(mode: mode)
+        frameGate.update(ownCamera: cameraSource != .head)
+        camera.setFront(cameraSource == .front)
 
         let gate = frameGate
         let cam = camera
@@ -94,8 +116,8 @@ final class ArgusViewModel: ObservableObject {
         camera.onFrame = { buffer in
             guard let spec = gate.shouldSend() else { return }
             guard let encoded = cam.encode(buffer, maxPx: spec.maxPx, quality: spec.quality) else { return }
-            var event: [String: Any] = ["event": spec.sign ? "slt_frame" : "video_frame", "image_data": encoded]
-            if spec.sign { event["ts"] = Int(Date().timeIntervalSince1970 * 1000) }
+            var event: [String: Any] = ["event": spec.signEvent ? "slt_frame" : "video_frame", "image_data": encoded]
+            if spec.timed { event["ts"] = Int(Date().timeIntervalSince1970 * 1000) }
             sock.sendFrame(event)
         }
         camera.$isRunning.sink { [weak self] on in self?.frameGate.update(camera: on) }.store(in: &bag)
@@ -156,13 +178,14 @@ final class ArgusViewModel: ObservableObject {
 
     func startQRScan() {
         scanningQR = true
-        camera.start()
+        applyCamera()
         camera.scanForQRCodes(true)
     }
 
     func stopQRScan() {
         scanningQR = false
         camera.scanForQRCodes(false)
+        applyCamera()
     }
 
     private func scanned(_ text: String) {
@@ -181,9 +204,11 @@ final class ArgusViewModel: ObservableObject {
     }
 
     private func sendHello() {
-        socket.send(["event": "hello", "client": "phone", "mode": mode.rawValue, "features": ["audio_queue"],
+        socket.send(["event": "hello", "client": "phone", "mode": mode.rawValue,
+                     "features": ["audio_queue", "camera_source", "screen_share"],
                      "device": UIDevice.current.name, "platform": "ios"])
         if mode == .slt { socket.send(["event": "set_mode", "mode": "slt", "language": signLanguage]) }
+        sendCameraChoice()
         system(pcName.isEmpty ? "Connected to ARGUS." : "Connected to ARGUS on \(pcName).")
     }
 
@@ -199,6 +224,16 @@ final class ArgusViewModel: ObservableObject {
             metrics.vramTotal = e.string("vram_total", metrics.vramTotal)
             let serverName = e.string("server_name")
             if !serverName.isEmpty { pcName = serverName }
+            let features = e["features"] as? [String] ?? []
+            serverHasCameras = features.contains("camera_source")
+            serverHasPhoneScreen = features.contains("phone_screen")
+            if cameraSource == .head && !serverHasCameras {
+                system("Update ARGUS on the PC to use the head-mount camera. Using this iPhone's camera for now.")
+                selectCamera(.back)
+            }
+            if let c = e["camera"] as? [String: Any] { cameraState(c) }
+        case "camera_state":
+            cameraState(e)
         case "mode_changed":
             if let m = ArgusMode(rawValue: e.string("mode")) { applyMode(m, tellServer: false) }
         case "argus_reply_start":
@@ -249,6 +284,29 @@ final class ArgusViewModel: ObservableObject {
             system(e.string("text"))
         default:
             break
+        }
+    }
+
+    /// Which camera the PC uses for this iPhone, whether the PC app wants this iPhone's camera,
+    /// and whether the screen broadcast is reaching the PC.
+    private func cameraState(_ e: [String: Any]) {
+        let wanted = e.string("phone_wanted")
+        if wanted != pcWantsPhone {
+            pcWantsPhone = wanted
+            frameGate.update(pcWants: wanted)
+            if !wanted.isEmpty { system("The PC app is using this iPhone's camera.") }
+            applyCamera()
+        }
+        let note = (e["head"] as? [String: Any])?.string("error") ?? ""
+        if note != headNote {
+            headNote = note
+            if !note.isEmpty && cameraSource == .head { system(note) }
+        }
+        let sharing = e.bool("screen_sharing")
+        if sharing != screenSharing {
+            screenSharing = sharing
+            system(sharing ? "ARGUS can see this iPhone's screen. Open any app and ask about it."
+                           : "Screen sharing stopped.")
         }
     }
 
@@ -309,11 +367,12 @@ final class ArgusViewModel: ObservableObject {
         if m != .slt {
             signCaption = ""
             signCaptionEnglish = ""
-        } else if !camera.isRunning {
-            camera.start()
+        } else if !cameraEnabled {
+            cameraEnabled = true
             system("Camera on: sign in front of it.")
         }
         if m != .assistive { guiding = false }
+        applyCamera()
         if tellServer {
             var event: [String: Any] = ["event": "set_mode", "mode": m.rawValue]
             if m == .slt { event["language"] = signLanguage }
@@ -341,8 +400,78 @@ final class ArgusViewModel: ObservableObject {
 
     // MARK: - Camera and voice
 
+    /// The Camera button.
     func toggleCamera() {
-        camera.isRunning ? camera.stop() : camera.start()
+        if mode == .screen {
+            system("Screen mode looks at this iPhone's screen, not the camera. Pick Live, Assistive or Sign to use a camera.")
+            return
+        }
+        cameraEnabled.toggle()
+        applyCamera()
+    }
+
+    /// Back camera, front camera, or the head-mount camera on the PC. Choosing one also turns the view on.
+    func selectCamera(_ source: CameraSource) {
+        if source == .head && connection == .connected && !serverHasCameras {
+            system("Update ARGUS on the PC to use the head-mount camera.")
+            return
+        }
+        cameraRaw = source.rawValue
+        frameGate.update(ownCamera: source != .head)
+        cameraEnabled = true
+        sendCameraChoice()
+        applyCamera()
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    private func sendCameraChoice() {
+        socket.send(["event": "set_camera", "source": cameraSource == .head ? "head" : "phone",
+                     "facing": cameraSource == .front ? "front" : "back"])
+    }
+
+    /// Turns the iPhone's camera and the head-mount view on or off to match the current choices.
+    private func applyCamera() {
+        let own = cameraEnabled && cameraSource != .head && mode != .screen
+        if scanningQR || !pcWantsPhone.isEmpty || own {
+            camera.setFront(!scanningQR && cameraSource == .front)  // QR codes are read with the back camera
+            camera.start()
+        } else {
+            camera.stop()
+        }
+        let wantHead = cameraEnabled && cameraSource == .head && mode != .screen && !scanningQR && connection == .connected
+        if wantHead { startHeadView() } else { stopHeadView() }
+    }
+
+    /// Shows what the head-mount camera sees by fetching its picture from the PC a few times a second.
+    private func startHeadView() {
+        guard headTask == nil, let url = headURL() else { return }
+        headTask = Task { [weak self] in
+            let session = URLSession(configuration: .ephemeral)
+            while !Task.isCancelled {
+                var image: UIImage?
+                if let (data, response) = try? await session.data(from: url),
+                   (response as? HTTPURLResponse)?.statusCode == 200 {
+                    image = UIImage(data: data)
+                }
+                if Task.isCancelled { break }
+                if let image { self?.headImage = image }
+                try? await Task.sleep(nanoseconds: image == nil ? 500_000_000 : 90_000_000)
+            }
+        }
+    }
+
+    private func stopHeadView() {
+        headTask?.cancel()
+        headTask = nil
+        headImage = nil
+    }
+
+    private func headURL() -> URL? {
+        guard var parts = URLComponents(string: serverURL) else { return nil }
+        parts.scheme = parts.scheme == "wss" ? "https" : "http"
+        parts.path = "/camera/head.jpg"
+        parts.queryItems = [URLQueryItem(name: "w", value: "720")]
+        return parts.url
     }
 
     func toggleVoice() {
@@ -421,8 +550,10 @@ final class ArgusViewModel: ObservableObject {
         audio.stop()
         let wantsOcr = forceOcr || ocrMode || Commands.wantsOcr(text)
         var prompt: [String: Any] = ["event": "user_prompt", "text": text, "mode": mode.rawValue, "ocr": wantsOcr]
-        guard wantsOcr, camera.isRunning, mode != .screen else {
-            if wantsOcr && !camera.isRunning && mode != .screen {
+        // The head-mount camera and the shared screen are already on the PC at full size.
+        let ownCamera = mode != .screen && cameraSource != .head
+        guard wantsOcr, camera.isRunning, ownCamera else {
+            if wantsOcr && !camera.isRunning && ownCamera {
                 system("Camera is off, so ARGUS will use the last frame it has.")
             }
             socket.send(prompt)
@@ -449,23 +580,33 @@ final class FrameGate: @unchecked Sendable {
     private var mode: ArgusMode = .live
     private var connected = false
     private var cameraOn = false
+    /// False while the head-mount camera is the chosen one: the iPhone's own frames aren't needed then.
+    private var ownCamera = true
+    /// "", "live" or "sign": the PC app is using this iPhone's camera.
+    private var pcWants = ""
     private var lastSent: TimeInterval = 0
 
     func update(mode: ArgusMode) { lock.lock(); self.mode = mode; lastSent = 0; lock.unlock() }
     func update(connected: Bool) { lock.lock(); self.connected = connected; lock.unlock() }
     func update(camera: Bool) { lock.lock(); cameraOn = camera; lock.unlock() }
+    func update(ownCamera: Bool) { lock.lock(); self.ownCamera = ownCamera; lock.unlock() }
+    func update(pcWants: String) { lock.lock(); self.pcWants = pcWants; lock.unlock() }
 
-    /// (isSignFrame, maxPx, jpegQuality) when a frame is due, else nil.
-    func shouldSend() -> (sign: Bool, maxPx: CGFloat, quality: CGFloat)? {
+    /// What to send when a frame is due, else nil. signEvent: the iPhone's own sign session;
+    /// timed: the frame carries a timestamp (any sign language session needs it).
+    func shouldSend() -> (signEvent: Bool, timed: Bool, maxPx: CGFloat, quality: CGFloat)? {
         lock.lock(); defer { lock.unlock() }
-        // Screen mode looks at the PC screen, so the phone camera isn't needed.
-        guard connected, cameraOn, mode != .screen else { return nil }
-        let sign = mode == .slt
+        guard connected, cameraOn else { return nil }
+        // Screen mode looks at the iPhone's screen, so the camera is only sent when the PC app asks for it.
+        let own = ownCamera && mode != .screen
+        guard own || !pcWants.isEmpty else { return nil }
+        let ownSign = own && mode == .slt
+        let sign = ownSign || pcWants == "sign"
         let interval = sign ? FrameConfig.signIntervalMs
-            : (mode == .assistive ? FrameConfig.assistIntervalMs : FrameConfig.liveIntervalMs)
+            : (own && mode == .assistive ? FrameConfig.assistIntervalMs : FrameConfig.liveIntervalMs)
         let now = Date().timeIntervalSince1970 * 1000
         guard now - lastSent >= interval else { return nil }
         lastSent = now
-        return sign ? (true, FrameConfig.signPx, 0.7) : (false, FrameConfig.livePx, 0.8)
+        return sign ? (ownSign, true, FrameConfig.signPx, 0.7) : (false, false, FrameConfig.livePx, 0.8)
     }
 }

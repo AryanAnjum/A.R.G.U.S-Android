@@ -3,7 +3,8 @@ import CoreImage
 import ImageIO
 import UIKit
 
-/// Back camera: a live preview, throttled upright JPEG frames for the server, and sharp photos for OCR.
+/// The iPhone's back or front camera: a live preview, throttled upright JPEG frames for the server,
+/// sharp photos for OCR, and QR code reading.
 final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate,
                            AVCapturePhotoCaptureDelegate, AVCaptureMetadataOutputObjectsDelegate {
     let session = AVCaptureSession()
@@ -20,6 +21,9 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     /// Called on the main queue with the text of a QR code while `scanForQRCodes(true)` is on.
     var onQRCode: ((String) -> Void)?
     private var configured = false
+    private var input: AVCaptureDeviceInput?
+    /// True while the front camera is the one in use.
+    @Published private(set) var isFront = false
     private var photoHandlers: [Int64: (Data?) -> Void] = [:]
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
@@ -39,21 +43,59 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         }
     }
 
-    private func configure() {
-        session.beginConfiguration()
-        defer { session.commitConfiguration() }
-        // 1080p keeps 1920 px OCR photos sharp while the stream frames are scaled down before sending.
-        session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-              let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input) else { return }
-        session.addInput(input)
+    /// Switches between the back and the front camera (also while running).
+    func setFront(_ front: Bool) {
+        sessionQueue.async {
+            guard front != self.wantFront else { return }
+            self.wantFront = front
+            guard self.configured else { return }
+            self.session.beginConfiguration()
+            self.attachCamera()
+            self.orientFrames()
+            self.session.commitConfiguration()
+        }
+    }
 
+    private var wantFront = false
+
+    /// Puts the wanted camera (back or front) on the session. Call inside begin/commitConfiguration.
+    @discardableResult
+    private func attachCamera() -> Bool {
+        let position: AVCaptureDevice.Position = wantFront ? .front : .back
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
+              let newInput = try? AVCaptureDeviceInput(device: device) else { return false }
+        if let old = input { session.removeInput(old) }
+        guard session.canAddInput(newInput) else {
+            if let old = input, session.canAddInput(old) { session.addInput(old) }
+            return false
+        }
+        session.addInput(newInput)
+        input = newInput
         if (try? device.lockForConfiguration()) != nil {
             if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
             if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
             device.unlockForConfiguration()
         }
+        let front = wantFront
+        DispatchQueue.main.async { self.isFront = front }
+        return true
+    }
+
+    /// Frames arrive upright in portrait, so the model never sees sideways text.
+    private func orientFrames() {
+        for output in [videoOutput as AVCaptureOutput, photoOutput] {
+            if let conn = output.connection(with: .video), conn.isVideoOrientationSupported {
+                conn.videoOrientation = .portrait
+            }
+        }
+    }
+
+    private func configure() {
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        // 1080p keeps 1920 px OCR photos sharp while the stream frames are scaled down before sending.
+        session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
+        guard attachCamera() else { return }
 
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         videoOutput.alwaysDiscardsLateVideoFrames = true
@@ -67,12 +109,7 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             session.addOutput(metadataOutput)
             metadataOutput.setMetadataObjectsDelegate(self, queue: .main)
         }
-        // Frames arrive upright in portrait, so the model never sees sideways text.
-        for output in [videoOutput as AVCaptureOutput, photoOutput] {
-            if let conn = output.connection(with: .video), conn.isVideoOrientationSupported {
-                conn.videoOrientation = .portrait
-            }
-        }
+        orientFrames()
         configured = true
     }
 

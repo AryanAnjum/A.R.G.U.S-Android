@@ -9,14 +9,17 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "2.0"
+    CURRENT_PROJECT_VERSION: "2"
 targets:
   ARGUS:
     type: application
     platform: iOS
     sources:
       - path: ARGUS
+    dependencies:
+      - target: ARGUSScreen
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: edu.nsu.argus.companion
@@ -47,11 +50,41 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
+  # "ARGUS Screen": the screen broadcast for Screen mode (ReplayKit broadcast upload extension).
+  ARGUSScreen:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ARGUSScreen
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: edu.nsu.argus.companion.screen
+        PRODUCT_NAME: ARGUSScreen
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: ARGUSScreen/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+    info:
+      path: ARGUSScreen/Info.plist
+      properties:
+        CFBundleDisplayName: ARGUS Screen
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSLocalNetworkUsageDescription: ARGUS sends your screen to the ARGUS server on your PC over Wi-Fi or hotspot.
+        NSBonjourServices: ["_argus._tcp"]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
 schemes:
   ARGUS:
     build:
       targets:
         ARGUS: all
+        ARGUSScreen: all
     run:
       config: Debug
     archive:
