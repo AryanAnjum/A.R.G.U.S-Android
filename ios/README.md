@@ -10,7 +10,9 @@ Android app uses.
 | Feature | How |
 |---|---|
 | Modes: Screen, Live, Assistive, Sign | Chips at the top (`set_mode`). Voice commands like "assistive mode" work too, because the server handles them. |
-| Camera frames | Back camera, upright JPEG. Live: 1024 px every 800 ms. Assistive: every 500 ms. Sign: 640 px at about 14 fps with timestamps (`slt_frame`). Screen mode sends none. |
+| Cameras | **Back**, **Front** or **Head-mount** (the USB camera worn on the head and plugged into the PC; its picture is shown live from the PC). When the PC app picks **Phone**, this iPhone's camera turns on for the PC too. |
+| Screen mode | Uses this iPhone's own screen, never the camera: tap **Share screen**, pick **ARGUS Screen**, press Start Broadcast, then ask from any app. The broadcast (`ARGUSScreen/`, a ReplayKit extension) finds the PC on the network by itself. |
+| Camera frames | Upright JPEG. Live: 1024 px every 800 ms. Assistive: every 500 ms. Sign: 640 px at about 14 fps with timestamps (`slt_frame`). Screen mode sends none (unless the PC app is using this iPhone's camera). |
 | Voice in | Apple speech recognition, on-device when the iPhone supports it. "Hey Argus" wakes it, then every phrase is a question until "goodbye". "Stop" interrupts ARGUS. |
 | Voice out | Plays the server's `tts_audio` clips (Piper WAV or edge-tts MP3) in order, on the loudspeaker or Bluetooth. Echo cancellation is on so ARGUS doesn't hear itself. |
 | Streaming replies | Shows `argus_reply_delta` text as it arrives. |
@@ -69,4 +71,5 @@ Pick your Apple ID under Signing & Capabilities, choose the iPhone and press Run
 - `ARGUS/ReplyAudioPlayer.swift`: plays reply audio in order
 - `ARGUS/Commands.swift`: wake word, stop, sleep and reading-question rules (same as Android)
 - `ARGUS/ContentView.swift`: the UI and the settings screen
+- `ARGUSScreen/SampleHandler.swift`: the ARGUS Screen broadcast for Screen mode
 - `project.yml`: XcodeGen project spec (the Xcode project is generated, not committed)
