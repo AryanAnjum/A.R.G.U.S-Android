@@ -89,15 +89,6 @@ class ArgusModel(private val app: Application) {
     /** "", "live" or "sign": the PC app is using this phone's camera. */
     private var pcWantsPhone = ""
 
-    // Language
-    /** English or Bengali: the language ARGUS speaks and answers in on this phone. */
-    var language by mutableStateOf(ReplyLanguage.from(prefs.getString("language", "en") ?: "en"))
-        private set
-    private var serverHasLanguage = false
-    private var translatorState = ""
-    /** Bangla sentences of each reply, by sentence number, as the PC translates them. */
-    private val translationParts = LinkedHashMap<String, java.util.TreeMap<Int, String>>()
-
     // Screen mode
     var screenSharing by mutableStateOf(false)
         private set
@@ -300,8 +291,7 @@ class ArgusModel(private val app: Application) {
     private fun sendHello() {
         socket.send(
             JSONObject().put("event", "hello").put("client", "phone").put("mode", mode.wire)
-                .put("features", JSONArray(listOf("audio_queue", "camera_source", "screen_share", "language")))
-                .put("language", language.wire)
+                .put("features", JSONArray(listOf("audio_queue", "camera_source", "screen_share")))
                 .put("device", "${Build.MANUFACTURER} ${Build.MODEL}".trim()).put("platform", "android")
         )
         if (mode == ArgusMode.SLT) {
@@ -340,15 +330,7 @@ class ArgusModel(private val app: Application) {
                     selectCamera(CameraSource.BACK)
                 }
                 e.optJSONObject("camera")?.let { cameraState(it) }
-                serverHasLanguage = "language" in names
-                translatorState = ""
-                e.optJSONObject("language")?.let { languageState(it) }
-                if (language == ReplyLanguage.BENGALI && !serverHasLanguage) {
-                    system("Update ARGUS on the PC to hear Bengali. Answers are in English for now.")
-                }
             }
-            "language_state" -> languageState(e)
-            "argus_reply_translation" -> addTranslation(e.optString("id"), e.optInt("seq"), e.optString("text"))
             "mode_changed" -> ArgusMode.from(e.optString("mode"))?.let { applyMode(it, tellServer = false) }
             "argus_reply_start" -> {
                 thinking = true
@@ -370,9 +352,7 @@ class ArgusModel(private val app: Application) {
             "guide_status" -> guiding = e.optBoolean("on")
             "guide_update" -> {
                 val warning = e.optBoolean("warning")
-                val english = e.optString("source")  // set when the update was spoken in Bangla
-                if (english.isEmpty()) add(Sender.ARGUS, e.optString("text"), isWarning = warning)
-                else add(Sender.ARGUS, english, isWarning = warning, translation = e.optString("text"))
+                add(Sender.ARGUS, e.optString("text"), isWarning = warning)
                 if (warning) buzz(180)
             }
             "slt_languages" -> {
@@ -411,46 +391,6 @@ class ArgusModel(private val app: Application) {
         }
     }
 
-    /** The PC confirms the language (it also changes by voice: "speak Bengali") and says if Bengali is ready. */
-    private fun languageState(e: JSONObject) {
-        val chosen = ReplyLanguage.from(e.optString("language", language.wire))
-        if (chosen != language) {
-            language = chosen
-            prefs.edit().putString("language", chosen.wire).apply()
-        }
-        val state = e.optJSONObject("translator")?.optString("state") ?: ""
-        if (state != translatorState) {
-            val before = translatorState
-            translatorState = state
-            if (language == ReplyLanguage.BENGALI) when (state) {
-                "loading" -> system("Getting Bengali ready on the PC. Answers are in English until it is.")
-                "error" -> system("Bengali couldn't load on the PC, so answers stay in English. Check the PC's log.")
-                "ready" -> if (before == "loading") system("Bengali is ready.")
-            }
-        }
-    }
-
-    private fun addTranslation(id: String, seq: Int, text: String) {
-        if (id.isEmpty() || text.isEmpty()) return
-        val parts = translationParts.getOrPut(id) { java.util.TreeMap() }
-        parts[seq] = text
-        while (translationParts.size > 20) translationParts.remove(translationParts.keys.first())
-        val i = messages.indexOfLast { it.replyId == id && it.sender == Sender.ARGUS }
-        if (i >= 0) messages[i] = messages[i].copy(translation = parts.values.joinToString(" "))
-    }
-
-    fun selectLanguage(choice: ReplyLanguage) {
-        if (choice == language) return
-        language = choice
-        prefs.edit().putString("language", choice.wire).apply()
-        if (connection != ConnectionState.CONNECTED) return
-        if (!serverHasLanguage) {
-            if (choice == ReplyLanguage.BENGALI) system("Update ARGUS on the PC to hear Bengali.")
-            return
-        }
-        socket.send(JSONObject().put("event", "set_language").put("language", choice.wire))
-    }
-
     private fun languages(list: JSONArray): List<SignLanguage> =
         (0 until list.length()).mapNotNull { i ->
             list.optJSONObject(i)?.let {
@@ -477,7 +417,7 @@ class ArgusModel(private val app: Application) {
     private fun finishReply(id: String, text: String) {
         val i = messages.indexOfLast { it.replyId == id && it.sender == Sender.ARGUS }
         if (i >= 0) messages[i] = messages[i].copy(text = text)
-        else add(Sender.ARGUS, text, replyId = id, translation = translationParts[id]?.values?.joinToString(" ") ?: "")
+        else add(Sender.ARGUS, text, replyId = id)
     }
 
     // endregion
@@ -485,10 +425,9 @@ class ArgusModel(private val app: Application) {
 
     fun system(text: String) = add(Sender.SYSTEM, text)
 
-    private fun add(sender: Sender, text: String, replyId: String? = null, isWarning: Boolean = false,
-                    allowEmpty: Boolean = false, translation: String = "") {
+    private fun add(sender: Sender, text: String, replyId: String? = null, isWarning: Boolean = false, allowEmpty: Boolean = false) {
         if (text.isEmpty() && !allowEmpty) return
-        messages.add(ChatMessage(nextMessageId++, sender, text, replyId, isWarning, translation))
+        messages.add(ChatMessage(nextMessageId++, sender, text, replyId, isWarning))
         while (messages.size > 60) messages.removeAt(0)
     }
 

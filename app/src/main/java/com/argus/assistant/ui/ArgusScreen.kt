@@ -46,7 +46,6 @@ import com.argus.assistant.ArgusModel
 import com.argus.assistant.CameraSource
 import com.argus.assistant.ChatMessage
 import com.argus.assistant.ConnectionState
-import com.argus.assistant.ReplyLanguage
 import com.argus.assistant.Sender
 
 val ArgusGreen = Color(0xFF00E676)
@@ -175,26 +174,12 @@ private fun Header(model: ArgusModel, onSettings: () -> Unit) {
             Metric("VRAM", "${m.vramUsed}/${m.vramTotal}G")
             Metric("GPU", if (m.temperature == "--") "--" else "${m.temperature}°")
             Metric("Reply", if (m.latency == "--") "--" else "${m.latency}ms")
-            LanguageChip(model)
             Icon(
                 ArgusIcons.Gear, "Settings", tint = Color.White.copy(alpha = 0.85f),
                 modifier = Modifier.size(26.dp).clip(CircleShape).clickable(onClick = onSettings),
             )
         }
     }
-}
-
-/** EN / বাং: the language ARGUS speaks. Tap to switch (or say "speak Bengali" / "speak English"). */
-@Composable
-private fun LanguageChip(model: ArgusModel) {
-    val current = model.language
-    val other = if (current == ReplyLanguage.ENGLISH) ReplyLanguage.BENGALI else ReplyLanguage.ENGLISH
-    Text(
-        current.short, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-        modifier = Modifier.clip(CircleShape).border(1.dp, ArgusTeal.copy(alpha = 0.6f), CircleShape)
-            .clickable { model.selectLanguage(other) }.padding(horizontal = 9.dp, vertical = 5.dp)
-            .semantics { contentDescription = "ARGUS speaks ${current.title}. Tap to switch to ${other.title}." },
-    )
 }
 
 private fun statusText(model: ArgusModel): String = when (model.connection) {
@@ -390,7 +375,7 @@ private fun Pill(title: String, icon: ImageVector? = null, filled: Boolean = fal
 private fun Transcript(model: ArgusModel) {
     val list = rememberLazyListState()
     val count = model.messages.size
-    val lastLength = model.messages.lastOrNull()?.let { it.text.length + it.translation.length } ?: 0
+    val lastLength = model.messages.lastOrNull()?.text?.length ?: 0
     LaunchedEffect(count, lastLength, model.partial, model.thinking) {
         val total = list.layoutInfo.totalItemsCount
         if (total > 0) list.animateScrollToItem(total - 1)
@@ -440,13 +425,7 @@ private fun Bubble(m: ChatMessage) {
                     if (m.isWarning) "⚠ A.R.G.U.S." else "A.R.G.U.S.", fontSize = 11.sp, fontWeight = FontWeight.Bold,
                     color = if (m.isWarning) ArgusWarn else ArgusTeal,
                 )
-                SelectionContainer {
-                    if (m.translation.isEmpty()) Text(m.text.ifEmpty { "…" }, color = Color.White, fontSize = 15.sp)
-                    else Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(m.translation, color = Color.White, fontSize = 16.sp)   // what was spoken, in Bangla
-                        Text(m.text, color = ArgusSubtext, fontSize = 12.sp)          // the English it came from
-                    }
-                }
+                SelectionContainer { Text(m.text.ifEmpty { "…" }, color = Color.White, fontSize = 15.sp) }
             }
             Spacer(Modifier.width(40.dp))
         }

@@ -23,16 +23,6 @@ enum class CameraSource(val wire: String, val title: String) {
     }
 }
 
-/** The language ARGUS speaks and answers in. The PC does the translating and the Bangla voice. */
-enum class ReplyLanguage(val wire: String, val title: String, val native: String, val short: String) {
-    ENGLISH("en", "English", "English", "EN"),
-    BENGALI("bn", "Bengali", "বাংলা", "বাং");
-
-    companion object {
-        fun from(wire: String): ReplyLanguage = entries.firstOrNull { it.wire == wire } ?: ENGLISH
-    }
-}
-
 enum class Sender { YOU, ARGUS, SYSTEM }
 
 data class ChatMessage(
@@ -42,8 +32,6 @@ data class ChatMessage(
     /** Server reply id, so streamed text lands on the right bubble. */
     val replyId: String? = null,
     val isWarning: Boolean = false,
-    /** The Bangla that was spoken for this message; shown on top, with [text] (English) below it. */
-    val translation: String = "",
 )
 
 data class SignLanguage(val code: String, val label: String, val signLanguage: String, val ready: Boolean)
