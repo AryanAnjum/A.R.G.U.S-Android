@@ -51,8 +51,24 @@ struct ContentView: View {
     @ViewBuilder private var background: some View {
         let ownView = model.camera.isRunning && (model.scanningQR || (model.mode != .screen && !headView))
         if headView, let image = model.headImage {
-            Image(uiImage: image).resizable().scaledToFill().ignoresSafeArea()
-                .accessibilityLabel("Head-mount camera")
+            // The head-mount picture is landscape, much wider than the screen. The GeometryReader keeps
+            // it inside the screen: a bare scaledToFill image is as wide as the picture and made the
+            // whole layout that wide, which pushed the buttons off both sides.
+            GeometryReader { geo in
+                ZStack {
+                    Color.black
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height).clipped()
+                        .blur(radius: 18).opacity(0.55)                    // soft backdrop
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .frame(width: geo.size.width, height: geo.size.height)  // the whole picture ARGUS sees
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .accessibilityLabel("Head-mount camera")
             shade
         } else if ownView {
             CameraPreview(session: model.camera.session).ignoresSafeArea()
