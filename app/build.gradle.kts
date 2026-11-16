@@ -13,8 +13,8 @@ android {
         applicationId = "com.argus.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
@@ -49,8 +49,11 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
 
-    // WebSocket
+    // WebSocket and the head-mount camera view
     implementation("com.squareup.okhttp3:okhttp:5.5.0")
+
+    // QR code reading for pairing with the PC (pure Java, no Google Play services needed)
+    implementation("com.google.zxing:core:3.5.3")
 
     // CameraX
     val cameraxVersion = "1.6.2"
