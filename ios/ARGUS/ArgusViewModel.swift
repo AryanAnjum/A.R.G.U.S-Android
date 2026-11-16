@@ -41,6 +41,14 @@ final class ArgusViewModel: ObservableObject {
     private var pcWantsPhone = ""
     private var headTask: Task<Void, Never>?
 
+    // Language
+    /// English or Bengali: the language ARGUS speaks and answers in on this iPhone.
+    @Published private(set) var replyLanguage = ReplyLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "en") ?? .english
+    private var serverHasLanguage = false
+    private var translatorState = ""
+    /// Bangla sentences of each reply, by sentence number, as the PC translates them.
+    private var translationParts: [String: [Int: String]] = [:]
+
     // Screen mode: this iPhone's screen, shared by the ARGUS Screen broadcast (ReplayKit)
     @Published private(set) var screenSharing = false
     private var serverHasPhoneScreen = false
@@ -205,7 +213,8 @@ final class ArgusViewModel: ObservableObject {
 
     private func sendHello() {
         socket.send(["event": "hello", "client": "phone", "mode": mode.rawValue,
-                     "features": ["audio_queue", "camera_source", "screen_share"],
+                     "features": ["audio_queue", "camera_source", "screen_share", "language"],
+                     "language": replyLanguage.rawValue,
                      "device": UIDevice.current.name, "platform": "ios"])
         if mode == .slt { socket.send(["event": "set_mode", "mode": "slt", "language": signLanguage]) }
         sendCameraChoice()
@@ -232,6 +241,16 @@ final class ArgusViewModel: ObservableObject {
                 selectCamera(.back)
             }
             if let c = e["camera"] as? [String: Any] { cameraState(c) }
+            serverHasLanguage = features.contains("language")
+            translatorState = ""
+            if let l = e["language"] as? [String: Any] { languageState(l) }
+            if replyLanguage == .bengali && !serverHasLanguage {
+                system("Update ARGUS on the PC to hear Bengali. Answers are in English for now.")
+            }
+        case "language_state":
+            languageState(e)
+        case "argus_reply_translation":
+            addTranslation(id: e.string("id"), seq: (e["seq"] as? NSNumber)?.intValue ?? 0, text: e.string("text"))
         case "camera_state":
             cameraState(e)
         case "mode_changed":
@@ -260,6 +279,11 @@ final class ArgusViewModel: ObservableObject {
         case "guide_update":
             var m = ChatMessage(sender: .argus, text: e.string("text"))
             m.isWarning = e.bool("warning")
+            let english = e.string("source")  // set when the update was spoken in Bangla
+            if !english.isEmpty {
+                m.translation = m.text
+                m.text = english
+            }
             messages.append(m)
             if m.isWarning { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
             trim()
@@ -310,6 +334,52 @@ final class ArgusViewModel: ObservableObject {
         }
     }
 
+    /// The PC confirms the language (it also changes by voice: "speak Bengali") and says if Bengali is ready.
+    private func languageState(_ e: [String: Any]) {
+        if let chosen = ReplyLanguage(rawValue: e.string("language")), chosen != replyLanguage {
+            replyLanguage = chosen
+            UserDefaults.standard.set(chosen.rawValue, forKey: "language")
+        }
+        let state = (e["translator"] as? [String: Any])?.string("state") ?? ""
+        if state != translatorState {
+            let before = translatorState
+            translatorState = state
+            guard replyLanguage == .bengali else { return }
+            switch state {
+            case "loading": system("Getting Bengali ready on the PC. Answers are in English until it is.")
+            case "error": system("Bengali couldn't load on the PC, so answers stay in English. Check the PC's log.")
+            case "ready": if before == "loading" { system("Bengali is ready.") }
+            default: break
+            }
+        }
+    }
+
+    private func addTranslation(id: String, seq: Int, text: String) {
+        guard !id.isEmpty, !text.isEmpty else { return }
+        if translationParts[id] == nil && translationParts.count > 20 { translationParts.removeAll() }
+        translationParts[id, default: [:]][seq] = text
+        if let i = messages.lastIndex(where: { $0.replyId == id && $0.sender == .argus }) {
+            messages[i].translation = joinedTranslation(id)
+        }
+    }
+
+    private func joinedTranslation(_ id: String) -> String {
+        (translationParts[id] ?? [:]).sorted { $0.key < $1.key }.map(\.value).joined(separator: " ")
+    }
+
+    func selectLanguage(_ choice: ReplyLanguage) {
+        guard choice != replyLanguage else { return }
+        replyLanguage = choice
+        UserDefaults.standard.set(choice.rawValue, forKey: "language")
+        UISelectionFeedbackGenerator().selectionChanged()
+        guard connection == .connected else { return }
+        guard serverHasLanguage else {
+            if choice == .bengali { system("Update ARGUS on the PC to hear Bengali.") }
+            return
+        }
+        socket.send(["event": "set_language", "language": choice.rawValue])
+    }
+
     nonisolated private static func language(_ d: [String: Any]) -> SignLanguage {
         SignLanguage(code: d.string("code"), label: d.string("label"),
                      signLanguage: d.string("sign_language"), ready: d.bool("ready"))
@@ -335,7 +405,9 @@ final class ArgusViewModel: ObservableObject {
         if let i = messages.lastIndex(where: { $0.replyId == id && $0.sender == .argus }) {
             messages[i].text = text
         } else {
-            messages.append(ChatMessage(sender: .argus, text: text, replyId: id))
+            var m = ChatMessage(sender: .argus, text: text, replyId: id)
+            m.translation = joinedTranslation(id)
+            messages.append(m)
         }
         trim()
     }

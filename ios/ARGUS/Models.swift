@@ -46,6 +46,16 @@ enum CameraSource: String, CaseIterable, Identifiable {
     }
 }
 
+/// The language ARGUS speaks and answers in. The PC does the translating and the Bangla voice.
+enum ReplyLanguage: String, CaseIterable, Identifiable {
+    case english = "en", bengali = "bn"
+    var id: String { rawValue }
+
+    var title: String { self == .english ? "English" : "Bengali" }
+    var native: String { self == .english ? "English" : "বাংলা" }
+    var short: String { self == .english ? "EN" : "বাং" }
+}
+
 struct ChatMessage: Identifiable, Equatable {
     enum Sender { case you, argus, system }
     let id = UUID()
@@ -54,6 +64,8 @@ struct ChatMessage: Identifiable, Equatable {
     /// Server reply id, so streamed deltas land on the right bubble.
     var replyId: String?
     var isWarning = false
+    /// The Bangla that was spoken for this message; shown on top, with `text` (English) below it.
+    var translation = ""
 }
 
 struct SignLanguage: Identifiable, Equatable {

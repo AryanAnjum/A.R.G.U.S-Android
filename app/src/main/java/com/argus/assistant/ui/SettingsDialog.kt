@@ -23,6 +23,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.argus.assistant.ArgusModel
 import com.argus.assistant.ArgusServer
 import com.argus.assistant.ConnectionState
+import com.argus.assistant.ReplyLanguage
 
 private val FormBackground = Color(0xFF0B0C10)
 private val FormRow = Color(0xFF1A1B21)
@@ -85,6 +86,18 @@ fun SettingsDialog(model: ArgusModel, onDismiss: () -> Unit) {
                         }
                     }
                     Footer("It is shown in the PC app's Connect phone panel. Port 8000 is added for you.")
+
+                    Section("Language")
+                    Group {
+                        for (l in ReplyLanguage.entries) {
+                            FormItem(null, if (l.native == l.title) l.title else "${l.native} (${l.title})", null,
+                                     trailing = if (model.language == l) ArgusIcons.Check else null) {
+                                model.selectLanguage(l)
+                            }
+                        }
+                    }
+                    Footer("ARGUS speaks and answers in this language. You can also say \"speak Bengali\" or \"speak English\". " +
+                           "Ask your questions in English.")
 
                     Section("Connected PC")
                     Group {
