@@ -141,6 +141,7 @@ struct ContentView: View {
             metric("VRAM", "\(model.metrics.vramUsed)/\(model.metrics.vramTotal)G")
             metric("GPU", model.metrics.temperature == "--" ? "--" : "\(model.metrics.temperature)°")
             metric("Reply", model.metrics.latency == "--" ? "--" : "\(model.metrics.latency)ms")
+            languageChip
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape.fill").font(.title3).foregroundColor(.white.opacity(0.85))
             }
@@ -149,6 +150,18 @@ struct ContentView: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 18).fill(Color.glass))
         .padding(.top, 4)
+    }
+
+    /// EN / বাং: the language ARGUS speaks. Tap to switch (or say "speak Bengali" / "speak English").
+    private var languageChip: some View {
+        let current = model.replyLanguage
+        let other: ReplyLanguage = current == .english ? .bengali : .english
+        return Button { model.selectLanguage(other) } label: {
+            Text(current.short).font(.caption.weight(.semibold)).foregroundColor(.white)
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .overlay(Capsule().stroke(Color.argusTeal.opacity(0.6), lineWidth: 1))
+        }
+        .accessibilityLabel("ARGUS speaks \(current.title). Tap to switch to \(other.title).")
     }
 
     private func metric(_ label: String, _ value: String) -> some View {
@@ -317,8 +330,13 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(m.isWarning ? "⚠︎ A.R.G.U.S." : "A.R.G.U.S.")
                         .font(.caption2.weight(.bold)).foregroundColor(m.isWarning ? .argusWarn : .argusTeal)
-                    Text(m.text.isEmpty ? "…" : m.text).font(.callout).foregroundColor(.white)
-                        .textSelection(.enabled)
+                    if m.translation.isEmpty {
+                        Text(m.text.isEmpty ? "…" : m.text).font(.callout).foregroundColor(.white)
+                            .textSelection(.enabled)
+                    } else {
+                        Text(m.translation).font(.body).foregroundColor(.white).textSelection(.enabled)  // what was spoken, in Bangla
+                        Text(m.text).font(.caption).foregroundColor(.argusSubtext)                        // the English it came from
+                    }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 14).fill(m.isWarning ? Color.argusWarn.opacity(0.25) : Color.white.opacity(0.1)))
@@ -468,6 +486,22 @@ struct SettingsView: View {
                     Text("Or type the PC's address")
                 } footer: {
                     Text("It is shown in the PC app's Connect phone panel. Port 8000 is added for you.")
+                }
+
+                Section {
+                    ForEach(ReplyLanguage.allCases) { l in
+                        Button { model.selectLanguage(l) } label: {
+                            HStack {
+                                Text(l.native == l.title ? l.title : "\(l.native) (\(l.title))").foregroundColor(.primary)
+                                Spacer()
+                                if model.replyLanguage == l { Image(systemName: "checkmark").foregroundColor(.argusGreen) }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Language")
+                } footer: {
+                    Text("ARGUS speaks and answers in this language. You can also say \"speak Bengali\" or \"speak English\". Ask your questions in English.")
                 }
 
                 Section("Connected PC") {

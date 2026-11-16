@@ -11,6 +11,7 @@ Android app uses.
 |---|---|
 | Modes: Screen, Live, Assistive, Sign | Chips at the top (`set_mode`). Voice commands like "assistive mode" work too, because the server handles them. |
 | Cameras | **Back**, **Front** or **Head-mount** (the USB camera worn on the head and plugged into the PC; its picture is shown live from the PC). When the PC app picks **Phone**, this iPhone's camera turns on for the PC too. |
+| Language | **EN / বাং** chip at the top (or Settings → Language, or say "speak Bengali" / "speak English"; `set_language`). With Bengali, ARGUS speaks and answers in Bangla in every mode; the chat shows the Bangla (`argus_reply_translation`) with the English below it. The PC does the translation and the Bangla voice. Ask your questions in English. |
 | Screen mode | Uses this iPhone's own screen, never the camera: tap **Share screen**, pick **ARGUS Screen**, press Start Broadcast, then ask from any app. The broadcast (`ARGUSScreen/`, a ReplayKit extension) finds the PC on the network by itself. |
 | Camera frames | Upright JPEG. Live: 1024 px every 800 ms. Assistive: every 500 ms. Sign: 640 px at about 14 fps with timestamps (`slt_frame`). Screen mode sends none (unless the PC app is using this iPhone's camera). |
 | Voice in | Apple speech recognition, on-device when the iPhone supports it. "Hey Argus" wakes it, then every phrase is a question until "goodbye". "Stop" interrupts ARGUS. |
