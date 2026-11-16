@@ -36,6 +36,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build | tee xcodebuild.log | grep -E "error:|warning:|BUILD" || true
           test -d build/Build/Products/Release-iphoneos/ARGUS.app
+          # The ARGUS Screen broadcast (Screen mode) must be inside the app.
+          test -d build/Build/Products/Release-iphoneos/ARGUS.app/PlugIns/ARGUSScreen.appex
 
       - name: Package .ipa
         working-directory: ios
