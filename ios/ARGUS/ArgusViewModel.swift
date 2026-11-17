@@ -115,6 +115,7 @@ final class ArgusViewModel: ObservableObject {
         }
         speech.onError = { [weak self] m in self?.system(m) }
         frameGate.update(mode: mode)
+        updateListenLanguage()
         frameGate.update(ownCamera: cameraSource != .head)
         camera.setFront(cameraSource == .front)
 
@@ -339,6 +340,7 @@ final class ArgusViewModel: ObservableObject {
         if let chosen = ReplyLanguage(rawValue: e.string("language")), chosen != replyLanguage {
             replyLanguage = chosen
             UserDefaults.standard.set(chosen.rawValue, forKey: "language")
+            updateListenLanguage()
         }
         let state = (e["translator"] as? [String: Any])?.string("state") ?? ""
         if state != translatorState {
@@ -367,10 +369,33 @@ final class ArgusViewModel: ObservableObject {
         (translationParts[id] ?? [:]).sorted { $0.key < $1.key }.map(\.value).joined(separator: " ")
     }
 
+    /// Assistive mode in Bengali listens in Bangla; every other mode, and English, listens in English.
+    private var bnUnavailable = false
+    private var bnListenNoted = false
+
+    private func updateListenLanguage() {
+        let bangla = replyLanguage == .bengali && mode == .assistive && !bnUnavailable
+        if bangla {
+            if !speech.setLanguage("bn-BD") {
+                bnUnavailable = true
+                system("This iPhone can't recognize Bangla speech, so ARGUS listens in English. "
+                       + "You can type in Bangla; ARGUS still answers in Bangla.")
+                return
+            }
+            if voiceOn && !bnListenNoted {
+                bnListenNoted = true
+                system("Assistive mode listens in Bangla: say \"হেই আর্গাস\" and ask in Bangla.")
+            }
+        } else {
+            speech.setLanguage("en-US")
+        }
+    }
+
     func selectLanguage(_ choice: ReplyLanguage) {
         guard choice != replyLanguage else { return }
         replyLanguage = choice
         UserDefaults.standard.set(choice.rawValue, forKey: "language")
+        updateListenLanguage()
         UISelectionFeedbackGenerator().selectionChanged()
         guard connection == .connected else { return }
         guard serverHasLanguage else {
@@ -436,6 +461,7 @@ final class ArgusViewModel: ObservableObject {
         let changed = m != mode
         mode = m
         frameGate.update(mode: m)
+        updateListenLanguage()
         if m != .slt {
             signCaption = ""
             signCaptionEnglish = ""
@@ -576,6 +602,7 @@ final class ArgusViewModel: ObservableObject {
             self.voiceOn = true
             self.speech.start()
             self.system("Listening. Say \"Hey Argus\" and your question.")
+            self.updateListenLanguage()
         }
     }
 

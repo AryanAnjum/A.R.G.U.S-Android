@@ -185,6 +185,11 @@ class ArgusModel(private val app: Application) {
         speech.onPhrase = { phrase -> handlePhrase(phrase) }
         speech.onPartial = { text -> partial = text }
         speech.onError = { message -> system(message) }
+        speech.onLanguageUnavailable = {
+            bnUnavailable = true
+            system("This phone can't recognize Bangla speech, so ARGUS listens in English. " +
+                "Add Bangla in Settings > Google > Voice (or type in Bangla). ARGUS still answers in Bangla.")
+        }
         // Echo guard: when ARGUS starts or stops talking, drop what the mic heard so far, because
         // on the loudspeaker that is ARGUS's own voice, not the user.
         audio.onTalkingChanged = { talking ->
@@ -417,6 +422,7 @@ class ArgusModel(private val app: Application) {
         if (chosen != language) {
             language = chosen
             prefs.edit().putString("language", chosen.wire).apply()
+            updateListenLanguage()
         }
         val state = e.optJSONObject("translator")?.optString("state") ?: ""
         if (state != translatorState) {
@@ -424,8 +430,8 @@ class ArgusModel(private val app: Application) {
             translatorState = state
             if (language == ReplyLanguage.BENGALI) when (state) {
                 "loading" -> system("Getting Bengali ready on the PC. Answers are in English until it is.")
-                "error" -> system("Bengali couldn't load on the PC, so answers stay in English. Check the PC's log.")
                 "ready" -> if (before == "loading") system("Bengali is ready.")
+                "error" -> system("Bengali couldn't load on the PC, so answers stay in English. Check the PC's log.")
             }
         }
     }
@@ -439,10 +445,24 @@ class ArgusModel(private val app: Application) {
         if (i >= 0) messages[i] = messages[i].copy(translation = parts.values.joinToString(" "))
     }
 
+    /** Assistive mode in Bengali listens in Bangla; every other mode, and English, listens in English. */
+    private var bnUnavailable = false
+    private var bnListenNoted = false
+
+    private fun updateListenLanguage() {
+        val bangla = language == ReplyLanguage.BENGALI && mode == ArgusMode.ASSISTIVE && !bnUnavailable
+        speech.setLanguage(if (bangla) "bn-BD" else "en-US")
+        if (bangla && voiceOn && !bnListenNoted) {
+            bnListenNoted = true
+            system("Assistive mode listens in Bangla: say \"হেই আর্গাস\" and ask in Bangla.")
+        }
+    }
+
     fun selectLanguage(choice: ReplyLanguage) {
         if (choice == language) return
         language = choice
         prefs.edit().putString("language", choice.wire).apply()
+        updateListenLanguage()
         if (connection != ConnectionState.CONNECTED) return
         if (!serverHasLanguage) {
             if (choice == ReplyLanguage.BENGALI) system("Update ARGUS on the PC to hear Bengali.")
@@ -502,6 +522,7 @@ class ArgusModel(private val app: Application) {
     private fun applyMode(m: ArgusMode, tellServer: Boolean) {
         mode = m
         gate.mode = m
+        updateListenLanguage()
         if (m != ArgusMode.SLT) {
             signCaption = ""
             signCaptionEnglish = ""
@@ -718,6 +739,7 @@ class ArgusModel(private val app: Application) {
         voiceOn = true
         speech.start()
         if (speech.isListening) system("Listening. Say \"Hey Argus\" and your question.") else voiceOn = false
+        updateListenLanguage()
     }
 
     /**

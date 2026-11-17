@@ -87,7 +87,7 @@ fun SettingsDialog(model: ArgusModel, onDismiss: () -> Unit) {
                     }
                     Footer("It is shown in the PC app's Connect phone panel. Port 8000 is added for you.")
 
-                    Section("Language")
+                    Section("Language in Assistive mode")
                     Group {
                         for (l in ReplyLanguage.entries) {
                             FormItem(null, if (l.native == l.title) l.title else "${l.native} (${l.title})", null,
@@ -96,8 +96,9 @@ fun SettingsDialog(model: ArgusModel, onDismiss: () -> Unit) {
                             }
                         }
                     }
-                    Footer("ARGUS speaks and answers in this language. You can also say \"speak Bengali\" or \"speak English\". " +
-                           "Ask your questions in English.")
+                    Footer("In Assistive mode (walking guidance) ARGUS speaks this language and, in Bengali, also " +
+                           "understands questions spoken in Bangla. Screen, Live and Sign mode stay English. You can " +
+                           "also say \"speak Bengali\" or \"speak English\".")
 
                     Section("Connected PC")
                     Group {

@@ -512,9 +512,9 @@ struct SettingsView: View {
                         }
                     }
                 } header: {
-                    Text("Language")
+                    Text("Language in Assistive mode")
                 } footer: {
-                    Text("ARGUS speaks and answers in this language. You can also say \"speak Bengali\" or \"speak English\". Ask your questions in English.")
+                    Text("In Assistive mode (walking guidance) ARGUS speaks this language and, in Bengali, also understands questions spoken in Bangla. Screen, Live and Sign mode stay English. You can also say \"speak Bengali\" or \"speak English\".")
                 }
 
                 Section("Connected PC") {

@@ -10,10 +10,34 @@ final class SpeechListener: NSObject, ObservableObject {
     var onPhrase: ((String) -> Void)?
     var onError: ((String) -> Void)?
 
+    /// Language being recognized: "en-US", or Bangla in Assistive mode with Bengali chosen.
+    private(set) var language = "en-US"
+
     /// Pause that ends a phrase. Matches the backend's 1.0 s end-of-speech pause.
     var endOfPhrasePause: TimeInterval = 1.0
 
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+
+    /// Switch the recognition language. Bangla tries bn-BD, then bn-IN. Returns false when this iPhone
+    /// has no recognizer for it; listening then stays in English.
+    @discardableResult
+    func setLanguage(_ tag: String) -> Bool {
+        let wantsBangla = tag.hasPrefix("bn")
+        if wantsBangla == language.hasPrefix("bn") { return true }
+        let candidates = wantsBangla ? ["bn-BD", "bn-IN", "bn"] : ["en-US"]
+        var found: (String, SFSpeechRecognizer)?
+        for id in candidates {
+            if let r = SFSpeechRecognizer(locale: Locale(identifier: id)) {
+                found = (id, r)
+                break
+            }
+        }
+        guard let match = found else { return false }
+        language = match.0
+        recognizer = match.1
+        if isListening { discardCurrentPhrase() }  // the next phrase uses the new language
+        return true
+    }
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -89,7 +113,9 @@ final class SpeechListener: NSObject, ObservableObject {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-        req.contextualStrings = ["Argus", "Hey Argus", "guide me", "read this", "sign mode", "assistive mode"]
+        req.contextualStrings = language.hasPrefix("bn")
+            ? ["আর্গাস", "হেই আর্গাস", "পথ দেখাও", "থামো", "গাইড বন্ধ করো"]
+            : ["Argus", "Hey Argus", "guide me", "read this", "sign mode", "assistive mode"]
         if #available(iOS 16.0, *) { req.addsPunctuation = false }
         request = req
         latestText = ""

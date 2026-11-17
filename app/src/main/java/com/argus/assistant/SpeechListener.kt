@@ -17,8 +17,24 @@ class SpeechListener(private val context: Context) {
     var onPhrase: ((String) -> Unit)? = null
     var onPartial: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
+    /** The phone can't recognize this language (no Bangla on its speech service): listening goes back to English. */
+    var onLanguageUnavailable: ((String) -> Unit)? = null
     var isListening = false
         private set
+
+    /** Language to recognize: "en-US", or "bn-BD" in Assistive mode with Bengali chosen. */
+    var language = "en-US"
+        private set
+
+    fun setLanguage(tag: String) {
+        if (tag == language) return
+        language = tag
+        if (isListening) {
+            onPartial?.invoke("")
+            destroyRecognizer()
+            restart(60)
+        }
+    }
 
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
@@ -119,12 +135,24 @@ class SpeechListener(private val context: Context) {
                         onError?.invoke("Allow Microphone for ARGUS in Settings.")
                         stop()
                     }
+                    // 12 / 13: language not supported / not available on this phone (Android 12 and newer)
+                    12, 13 -> if (language != "en-US") {
+                        val failed = language
+                        language = "en-US"
+                        onLanguageUnavailable?.invoke(failed)
+                        destroyRecognizer()
+                        restart(200)
+                    } else {
+                        destroyRecognizer()
+                        restart(1500)
+                    }
                     else -> {
                         note(
                             when (error) {
                                 SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
                                 SpeechRecognizer.ERROR_SERVER ->
-                                    "Speech recognition needs the internet, or the offline English pack " +
+                                    if (language.startsWith("bn")) "Bangla speech recognition needs the internet."
+                                    else "Speech recognition needs the internet, or the offline English pack " +
                                         "(Settings > Google > Voice > Offline speech recognition)."
                                 SpeechRecognizer.ERROR_AUDIO -> "The microphone is busy in another app."
                                 else -> "Speech recognition error $error. Trying again."
@@ -138,8 +166,9 @@ class SpeechListener(private val context: Context) {
         })
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)

@@ -20,7 +20,7 @@ With Android Studio instead: open this folder and press Run.
 |---|---|
 | Modes: Screen, Live, Assistive, Sign | Chips at the top. Voice commands like "assistive mode" work too |
 | Cameras | **Back**, **Front** or **Head-mount**. Head-mount is the USB camera worn on the head and plugged into the PC; the phone shows its picture live and ARGUS answers from it |
-| Language | **EN / বাং** chip at the top (or Settings → Language, or say "speak Bengali" / "speak English"). With Bengali, ARGUS speaks and answers in Bangla in every mode; the chat shows the Bangla with the English below it. The PC does the translation and the Bangla voice. Ask your questions in English |
+| Language | **EN / বাং** chip at the top (or Settings → Language, or say "speak Bengali" / "speak English"). With Bengali, Assistive mode (walking guidance) speaks Bangla and listens in Bangla (`bn-BD` speech recognition, needs internet): say "হেই আর্গাস", ask in Bangla, or say "পথ দেখাও", "থামো", "গাইড বন্ধ করো". Screen, Live and Sign mode stay English. The chat shows the Bangla with the English below it. The PC does the translation and the Bangla voice |
 | Screen mode | Uses this phone's own screen, never the camera. Tap **Share screen**, allow it, then open any app and ask "Hey Argus, what's on my screen?" ARGUS keeps listening while you are in other apps; stop from the notification or the app |
 | Voice | "Hey Argus" wakes it, then every phrase is a question until "goodbye". "Stop" interrupts ARGUS |
 | Replies | Streamed text, reply audio played sentence by sentence |
